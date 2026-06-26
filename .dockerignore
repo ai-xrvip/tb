@@ -1,0 +1,54 @@
+﻿# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Env files — NEVER in Docker image
+.env
+.env.template
+.env.production
+railway.env
+
+# Database
+bot.db
+*.db
+
+# Temp / cache
+tmp/
+outputs/
+
+# Logs & backups (mounted volumes or ephemeral)
+logs/
+backups/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Deploy docs (not needed at runtime)
+DEPLOY.md
+IMAGE_GENERATION_BRIEF.md
