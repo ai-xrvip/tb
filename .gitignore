@@ -1,0 +1,13 @@
+.env
+.env.template
+__pycache__/
+*.pyc
+bot.db
+.gitkeep
+.DS_Store
+railway.env
+tmp/
+outputs/
+logs/
+
+backups/
