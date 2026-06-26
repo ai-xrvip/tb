@@ -1,5 +1,5 @@
-"""
-Speech-to-text via free providers: Cloudflare Workers AI > Groq
+﻿"""
+Speech-to-text via Cloudflare Workers AI (free, ~3000 req/day)
 """
 import io
 import base64
@@ -12,12 +12,12 @@ from utils.logger import logger
 
 # Max voice duration allowed (seconds)
 MAX_VOICE_DURATION = 60
-# API timeout per provider (seconds)
+# API timeout (seconds)
 STT_TIMEOUT = 10
 
 
 async def _transcribe_cf(ogg_bytes: bytes) -> str | None:
-    """Cloudflare Workers AI Whisper (free, ~3000 req/day) — JSON + base64"""
+    """Cloudflare Workers AI Whisper (free tier) — JSON + base64"""
     if not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN:
         return None
     try:
@@ -42,38 +42,25 @@ async def _transcribe_cf(ogg_bytes: bytes) -> str | None:
     return None
 
 
-async def _transcribe_groq(ogg_bytes: bytes) -> str | None:
-    """Groq Whisper API (free tier, ~30 req/min) — multipart upload"""
-    if not config.GROQ_API_KEY:
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=STT_TIMEOUT) as client:
-            resp = await client.post(
-                "https://api.groq.com/openai/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
-                files={"file": ("audio.ogg", ogg_bytes, "audio/ogg")},
-                data={"model": config.GROQ_STT_MODEL, "language": "zh"},
-            )
-            if resp.status_code == 200:
-                text = resp.json().get("text", "")
-                if text:
-                    logger.info(f"Groq STT ok: {text[:80]}")
-                    return text
-            logger.warning(f"Groq STT failed: {resp.status_code}")
-    except Exception as e:
-        logger.warning(f"Groq STT error: {e}")
-    return None
-
-
 def _get_stt_error(role_id: str) -> str:
     from roles import get_role
     role = get_role(role_id)
     role_name = role.get("name", "?") if role else "?"
     return random.choice([
-        f"?? {role_name}??????,???? (*^??*)",
-        f"{role_name}????,?????~",
-        f"??{role_name}???~?????",
+        f"😣 {role_name}没听清呢，可以打字再说一遍吗 (*^▽^*)",
+        f"{role_name}信号不太好，发文字给我吧~",
+        f"唔{role_name}没听懂~打字告诉我吧！",
     ])
+
+
+def _get_stt_not_configured(role_id: str) -> str:
+    from roles import get_role
+    role = get_role(role_id)
+    role_name = role.get("name", "?") if role else "?"
+    return (
+        f"😅 {role_name}的语音功能还没开通呢～\n\n"
+        f"温馨提示：管理员配置 Cloudflare Workers AI 后即可使用语音聊天，完全免费！"
+    )
 
 
 async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -89,16 +76,13 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     duration = msg.voice.duration
     if duration > MAX_VOICE_DURATION:
         await update.message.reply_text(
-            f"?? ??? {MAX_VOICE_DURATION}?? ?, ???~"
+            f"🎤 语音太长啦（超过{MAX_VOICE_DURATION}秒），发短一点吧~"
         )
         return
 
-    # Check if any STT key is configured
-    has_key = config.CF_ACCOUNT_ID or config.GROQ_API_KEY
-    if not has_key:
-        await update.message.reply_text(
-            "?? ??? API ?, ?????~"
-        )
+    # Check if Cloudflare STT is configured
+    if not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN:
+        await update.message.reply_text(_get_stt_not_configured(role_id))
         return
 
     try:
@@ -109,8 +93,8 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await update.message.chat.send_action(action="typing")
 
-        # Try Cloudflare first (free), then Groq (free)
-        text = await _transcribe_cf(ogg_bytes) or await _transcribe_groq(ogg_bytes)
+        # Transcribe via Cloudflare Workers AI
+        text = await _transcribe_cf(ogg_bytes)
 
         if text and text.strip():
             msg.text = text

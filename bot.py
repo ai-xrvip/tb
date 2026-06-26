@@ -231,7 +231,7 @@ def build_single_bot(role_id: str, token: str) -> Application:
         app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, handle_group_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_media_message))
-    if config.ENABLE_STT or config.STT_PROVIDER:
+    if config.CF_ACCOUNT_ID and config.CF_API_TOKEN:
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice_message))
 
     # ── Callbacks ──
@@ -514,5 +514,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
+
 
 
