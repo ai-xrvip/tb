@@ -1,11 +1,11 @@
 ﻿"""
 Speech-to-text via Cloudflare Workers AI (free, ~3000 req/day)
+Sends raw WAV bytes as u8 int array (Cloudflare Whisper speaks this format)
 """
 import io
 import random
 import asyncio
 import tempfile
-import struct
 from pathlib import Path
 import httpx
 from telegram import Update
@@ -17,20 +17,23 @@ MAX_VOICE_DURATION = 60
 STT_TIMEOUT = 20
 
 
-async def _ogg_to_pcm_samples(ogg_bytes: bytes) -> list[int] | None:
-    """Convert OGG -> raw 16-bit PCM -> list of int samples (skips WAV header)"""
+async def _ogg_to_wav_u8(ogg_bytes: bytes) -> list[int] | None:
+    """Convert OGG -> 16kHz mono WAV (bitexact, no extra chunks) -> raw u8 int array"""
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as inf, \
-         tempfile.NamedTemporaryFile(suffix=".pcm", delete=False) as outf:
+         tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as outf:
         inf.write(ogg_bytes)
         inf.flush()
         inf_path = inf.name
         out_path = outf.name
 
     try:
+        # -bitexact ensures clean WAV header without extra metadata chunks
         proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-i", inf_path,
+            "ffmpeg", "-y",
+            "-fflags", "+bitexact",
+            "-i", inf_path,
             "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000",
-            "-f", "s16le", out_path,
+            "-f", "wav", out_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -39,17 +42,14 @@ async def _ogg_to_pcm_samples(ogg_bytes: bytes) -> list[int] | None:
             logger.error(f"ffmpeg failed: {stderr.decode()[:200]}")
             return None
 
-        pcm_bytes = Path(out_path).read_bytes()
-        if len(pcm_bytes) < 100:
+        wav_bytes = Path(out_path).read_bytes()
+        if len(wav_bytes) < 100:
             logger.error("ffmpeg: empty output")
             return None
 
-        # Parse 16-bit little-endian signed samples
-        count = len(pcm_bytes) // 2
-        samples = struct.unpack(f"<{count}h", pcm_bytes)
-        result = list(samples)
-        logger.info(f"OGG {len(ogg_bytes)}B -> PCM {count} samples ({len(pcm_bytes)} bytes, 16kHz mono)")
-        return result
+        logger.info(f"OGG {len(ogg_bytes)}B -> WAV {len(wav_bytes)}B (16kHz mono, bitexact)")
+        # Send raw WAV bytes as u8 int array (0-255 range)
+        return list(wav_bytes)
     except FileNotFoundError:
         logger.error("ffmpeg not found!")
         return None
@@ -65,12 +65,12 @@ async def _ogg_to_pcm_samples(ogg_bytes: bytes) -> list[int] | None:
 
 
 async def _transcribe_cf(ogg_bytes: bytes) -> str | None:
-    """Send PCM int16 samples to Cloudflare Whisper"""
+    """Send raw WAV bytes to Cloudflare Whisper"""
     if not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN:
         return None
 
-    samples = await _ogg_to_pcm_samples(ogg_bytes)
-    if not samples:
+    audio_array = await _ogg_to_wav_u8(ogg_bytes)
+    if not audio_array:
         return None
 
     url = f"https://api.cloudflare.com/client/v4/accounts/{config.CF_ACCOUNT_ID}/ai/run/@cf/openai/whisper"
@@ -83,9 +83,9 @@ async def _transcribe_cf(ogg_bytes: bytes) -> str | None:
                     "Authorization": f"Bearer {config.CF_API_TOKEN}",
                     "Content-Type": "application/json",
                 },
-                json={"audio": samples},
+                json={"audio": audio_array},
             )
-            logger.info(f"CF STT: HTTP {resp.status_code}, body_len={len(resp.text)}")
+            logger.info(f"CF STT: HTTP {resp.status_code}")
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -93,7 +93,7 @@ async def _transcribe_cf(ogg_bytes: bytes) -> str | None:
                     result = data.get("result", {})
                     text = result.get("text", "") if isinstance(result, dict) else str(result)
                     text = text.strip()
-                    logger.info(f"CF STT text: [{text}]")
+                    logger.info(f"CF STT ok: [{text[:100]}]")
                     return text if text else None
                 else:
                     logger.warning(f"CF STT errors: {data.get('errors')}")
@@ -157,7 +157,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text(_get_stt_error(role_id))
             return
 
-        logger.info(f"Voice recv: user={user_id}, bytes={len(ogg_bytes)}, dur={duration}s")
+        logger.info(f"Voice recv: user={user_id}, size={len(ogg_bytes)}B, dur={duration}s")
 
         text = await _transcribe_cf(ogg_bytes)
 
