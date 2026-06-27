@@ -476,8 +476,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # delay disabled per user request
     # await asyncio.sleep(delay)
 
+    # ?? TTS voice (check first, skip text if voice sent) ??
+    voice_sent = False
+    if config.TTS_ENABLED and clean_reply:
+        try:
+            voice_data = await generate_role_voice(
+                clean_reply, role_id, role,
+                trigger_rate=config.TTS_TRIGGER_RATE,
+            )
+            if voice_data:
+                await update.message.reply_voice(voice_data)
+                voice_sent = True
+        except Exception as tts_err:
+            logger.error(f"TTS failed for {role_id}: {tts_err}")
+
     if clean_reply:
-        await update.message.reply_text(clean_reply)
+        if not voice_sent:
+            await update.message.reply_text(clean_reply)
 
         # Mood-aware sticker injection
         try:

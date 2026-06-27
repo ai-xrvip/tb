@@ -92,10 +92,18 @@ class Config:
     KEEPALIVE_INTERVAL: int = int(os.getenv("KEEPALIVE_INTERVAL", "240"))  # 绉掞紝榛樿4鍒嗛挓
 
     # 鈹€鈹€ TTS 璇煶 鈹€鈹€
+    # ?? TTS ?? ??
     TTS_ENABLED: bool = os.getenv("TTS_ENABLED", "true").lower() == "true"
+    TTS_PROVIDER: str = os.getenv("TTS_PROVIDER", "azure")  # azure / edge
     TTS_TRIGGER_RATE: float = float(os.getenv("TTS_TRIGGER_RATE", "0.15"))
-    TTS_VOICE: str = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
     TTS_MAX_CHARS: int = int(os.getenv("TTS_MAX_CHARS", "300"))
+
+    # ?? Azure TTS (?? 50???/?, ????) ??
+    AZURE_SPEECH_KEY: str = os.getenv("AZURE_SPEECH_KEY", "")
+    AZURE_SPEECH_REGION: str = os.getenv("AZURE_SPEECH_REGION", "eastasia")
+
+    # ?? Edge TTS (????) ??
+    TTS_VOICE: str = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
 
     # ── STT 语音转文字 (Cloudflare Workers AI, 免费 ~3000次/天) ──
     STT_PROVIDER: str = os.getenv("STT_PROVIDER", "cloudflare")
