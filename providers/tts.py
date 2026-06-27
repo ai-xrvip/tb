@@ -123,12 +123,9 @@ async def generate_role_voice(
     voice = get_voice_for_role(role_id, role)
     provider = config.TTS_PROVIDER
 
-    # Try Azure first, fall back to Edge
-    if provider == "azure":
-        result = await _azure_tts(voice_text, voice)
-        if result:
-            return result
-        logger.info("Azure TTS failed, falling back to Edge...")
-        return await _edge_tts(voice_text, voice)
+    # Azure only ? no fallback
+    if provider == "azure" and config.AZURE_SPEECH_KEY:
+        return await _azure_tts(voice_text, voice)
     else:
-        return await _edge_tts(voice_text, voice)
+        logger.debug("TTS skipped: Azure not configured")
+        return None
