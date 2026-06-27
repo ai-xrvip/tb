@@ -1,44 +1,101 @@
 ﻿"""
 Speech-to-text via Cloudflare Workers AI (free, ~3000 req/day)
+Converts OGG (Telegram voice) -> WAV (ffmpeg) -> Cloudflare Whisper
 """
 import io
 import base64
 import random
+import asyncio
+import tempfile
+from pathlib import Path
 import httpx
 from telegram import Update
 from telegram.ext import ContextTypes
 from config import config
 from utils.logger import logger
 
-# Max voice duration allowed (seconds)
 MAX_VOICE_DURATION = 60
-# API timeout (seconds)
-STT_TIMEOUT = 10
+STT_TIMEOUT = 15
+
+
+async def _ogg_to_wav(ogg_bytes: bytes) -> bytes:
+    """Convert OGG/Opus to WAV using ffmpeg"""
+    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as inf, \
+         tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as outf:
+        inf.write(ogg_bytes)
+        inf.flush()
+        inf_path = inf.name
+        out_path = outf.name
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", inf_path,
+            "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000",
+            "-f", "wav", out_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            logger.error(f"ffmpeg convert failed: {stderr.decode()[:200]}")
+            return b""
+
+        wav_bytes = Path(out_path).read_bytes()
+        if len(wav_bytes) < 100:
+            logger.error("ffmpeg produced empty WAV")
+            return b""
+        return wav_bytes
+    finally:
+        try:
+            Path(inf_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            Path(out_path).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 async def _transcribe_cf(ogg_bytes: bytes) -> str | None:
-    """Cloudflare Workers AI Whisper (free tier) — JSON + base64"""
+    """Cloudflare Workers AI Whisper — auto-converts OGG to WAV first"""
     if not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN:
         return None
+
+    # Convert OGG -> WAV
+    wav_bytes = await _ogg_to_wav(ogg_bytes)
+    if not wav_bytes:
+        logger.error("STT: OGG->WAV conversion produced empty output")
+        return None
+
+    audio_b64 = base64.b64encode(wav_bytes).decode("ascii")
+    url = f"https://api.cloudflare.com/client/v4/accounts/{config.CF_ACCOUNT_ID}/ai/run/@cf/openai/whisper"
+
     try:
-        url = f"https://api.cloudflare.com/client/v4/accounts/{config.CF_ACCOUNT_ID}/ai/run/@cf/openai/whisper"
-        audio_b64 = base64.b64encode(ogg_bytes).decode("ascii")
         async with httpx.AsyncClient(timeout=STT_TIMEOUT) as client:
             resp = await client.post(
                 url,
                 headers={"Authorization": f"Bearer {config.CF_API_TOKEN}"},
                 json={"audio": audio_b64},
             )
+            logger.info(f"CF STT response: HTTP {resp.status_code}, body={resp.text[:300]}")
+
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success", True):
-                    text = data.get("result", {}).get("text", "")
+                    result = data.get("result", {})
+                    text = result.get("text", "") if isinstance(result, dict) else ""
                     if text:
                         logger.info(f"CF STT ok: {text[:80]}")
                         return text
-            logger.warning(f"CF STT failed: {resp.status_code} {resp.text[:200]}")
+                    else:
+                        logger.warning(f"CF STT: empty text in response. Full result: {result}")
+                else:
+                    logger.warning(f"CF STT: success=false, errors={data.get('errors')}")
+            else:
+                logger.warning(f"CF STT HTTP {resp.status_code}: {resp.text[:300]}")
     except Exception as e:
-        logger.warning(f"CF STT error: {e}")
+        logger.error(f"CF STT exception: {e}")
+
     return None
 
 
@@ -64,12 +121,11 @@ def _get_stt_not_configured(role_id: str) -> str:
 
 
 async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle voice message: download -> transcribe -> reply"""
+    """Handle voice message: download OGG -> convert to WAV -> transcribe via Cloudflare -> reply"""
     msg = update.message
     if not msg or not msg.voice:
         return
 
-    user_id = update.effective_user.id
     role_id = context.bot_data.get("role_id", "xiaolu")
 
     # Duration check
@@ -91,9 +147,9 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await voice_file.download_to_memory(buf)
         ogg_bytes = buf.getvalue()
 
-        await update.message.chat.send_action(action="typing")
+        logger.info(f"Voice received: user={update.effective_user.id}, size={len(ogg_bytes)} bytes, duration={duration}s")
 
-        # Transcribe via Cloudflare Workers AI
+        # Transcribe (type indicator removed per user request)
         text = await _transcribe_cf(ogg_bytes)
 
         if text and text.strip():
@@ -103,5 +159,5 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             await update.message.reply_text(_get_stt_error(role_id))
     except Exception as e:
-        logger.error(f"voice error user_id={user_id}: {e}")
+        logger.error(f"voice error: {e}")
         await update.message.reply_text(_get_stt_error(role_id))
