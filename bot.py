@@ -283,7 +283,7 @@ def build_single_bot(role_id: str, token: str) -> Application:
     # ── Job Queue: moments ──
     import random as _rnd
     app.job_queue.run_repeating(
-        lambda ctx: send_moment_broadcast(ctx, role_id),
+        lambda ctx: send_moment_broadcast(ctx),
         interval=_rnd.randint(MOMENTS_INTERVAL_MIN, MOMENTS_INTERVAL_MAX),
         first=60,
         name=f"moments_{role_id}",
@@ -549,6 +549,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
+
 
 
 
