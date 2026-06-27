@@ -5,6 +5,7 @@ import io
 import random
 import asyncio
 import tempfile
+import struct
 from pathlib import Path
 import httpx
 from telegram import Update
@@ -16,10 +17,10 @@ MAX_VOICE_DURATION = 60
 STT_TIMEOUT = 20
 
 
-async def _ogg_to_wav_array(ogg_bytes: bytes) -> list[int] | None:
-    """Convert OGG -> 8kHz mono WAV -> flat int array (full WAV with header)"""
+async def _ogg_to_pcm_samples(ogg_bytes: bytes) -> list[int] | None:
+    """Convert OGG -> raw 16-bit PCM -> list of int samples (skips WAV header)"""
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as inf, \
-         tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as outf:
+         tempfile.NamedTemporaryFile(suffix=".pcm", delete=False) as outf:
         inf.write(ogg_bytes)
         inf.flush()
         inf_path = inf.name
@@ -28,8 +29,8 @@ async def _ogg_to_wav_array(ogg_bytes: bytes) -> list[int] | None:
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y", "-i", inf_path,
-            "-acodec", "pcm_s16le", "-ac", "1", "-ar", "8000",
-            "-f", "wav", out_path,
+            "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000",
+            "-f", "s16le", out_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -38,16 +39,19 @@ async def _ogg_to_wav_array(ogg_bytes: bytes) -> list[int] | None:
             logger.error(f"ffmpeg failed: {stderr.decode()[:200]}")
             return None
 
-        wav_bytes = Path(out_path).read_bytes()
-        if len(wav_bytes) < 100:
+        pcm_bytes = Path(out_path).read_bytes()
+        if len(pcm_bytes) < 100:
             logger.error("ffmpeg: empty output")
             return None
 
-        logger.info(f"OGG {len(ogg_bytes)}B -> WAV {len(wav_bytes)}B (8kHz mono)")
-        # Send FULL WAV (with header) as int array
-        return list(wav_bytes)
+        # Parse 16-bit little-endian signed samples
+        count = len(pcm_bytes) // 2
+        samples = struct.unpack(f"<{count}h", pcm_bytes)
+        result = list(samples)
+        logger.info(f"OGG {len(ogg_bytes)}B -> PCM {count} samples ({len(pcm_bytes)} bytes, 16kHz mono)")
+        return result
     except FileNotFoundError:
-        logger.error("ffmpeg not found! Is it installed in the container?")
+        logger.error("ffmpeg not found!")
         return None
     finally:
         try:
@@ -61,12 +65,12 @@ async def _ogg_to_wav_array(ogg_bytes: bytes) -> list[int] | None:
 
 
 async def _transcribe_cf(ogg_bytes: bytes) -> str | None:
-    """Send WAV int array to Cloudflare Whisper"""
+    """Send PCM int16 samples to Cloudflare Whisper"""
     if not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN:
         return None
 
-    audio_array = await _ogg_to_wav_array(ogg_bytes)
-    if not audio_array:
+    samples = await _ogg_to_pcm_samples(ogg_bytes)
+    if not samples:
         return None
 
     url = f"https://api.cloudflare.com/client/v4/accounts/{config.CF_ACCOUNT_ID}/ai/run/@cf/openai/whisper"
@@ -79,7 +83,7 @@ async def _transcribe_cf(ogg_bytes: bytes) -> str | None:
                     "Authorization": f"Bearer {config.CF_API_TOKEN}",
                     "Content-Type": "application/json",
                 },
-                json={"audio": audio_array},
+                json={"audio": samples},
             )
             logger.info(f"CF STT: HTTP {resp.status_code}, body_len={len(resp.text)}")
 
@@ -120,7 +124,7 @@ def _get_stt_not_configured(role_id: str) -> str:
     role_name = role.get("name", "?") if role else "?"
     return (
         f"😅 {role_name}的语音功能还没开通呢～\n\n"
-        f"温馨提示：管理员配置 Cloudflare Workers AI 后即可使用语音聊天，完全免费！"
+        f"管理员配置 Cloudflare Workers AI 后即可使用语音聊天，完全免费！"
     )
 
 
