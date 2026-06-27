@@ -15,6 +15,9 @@ RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 # ── App code ──
 COPY . .
 
+# ── Persistent data volume ──
+RUN mkdir -p /data
+
 # ── Railway port ──
 EXPOSE 8080
 
@@ -24,3 +27,4 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 
 # ── Run ──
 CMD ["python", "bot.py"]
+
