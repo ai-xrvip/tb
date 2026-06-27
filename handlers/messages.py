@@ -477,6 +477,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if clean_reply:
         await update.message.reply_text(clean_reply)
+
+        # Random sticker/emoji injection (15% chance)
+        if random.random() < 0.15:
+            try:
+                # Cute animated emoji via send_dice
+                dice_emojis = ["??", "??", "??", "?", "??"]
+                await update.message.reply_dice(emoji=random.choice(dice_emojis))
+            except Exception:
+                pass
     else:
         await update.message.reply_text(MEDIA_TAG_RE.sub("", full_reply).strip() or "💬")
 
