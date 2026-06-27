@@ -472,11 +472,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             clean_reply = mood_emoji + " " + clean_reply
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
+        mood = {"id": "neutral"}
     # delay disabled per user request
     # await asyncio.sleep(delay)
 
     if clean_reply:
         await update.message.reply_text(clean_reply)
+
+        # Mood-aware sticker injection
+        try:
+            mood_id_val = mood.get("id", "neutral")
+            if mood_id_val in ("happy", "playful", "sexy") and random.random() < 0.25:
+                await update.message.reply_dice(emoji="??")
+            elif mood_id_val in ("neutral",) and random.random() < 0.10:
+                await update.message.reply_dice(emoji="??")
+        except Exception:
+            pass
 
         # Random sticker/emoji injection (15% chance)
         if random.random() < 0.15:
