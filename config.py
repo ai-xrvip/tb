@@ -68,6 +68,11 @@ class Config:
     # 鈹€鈹€ 鏀粯锛堥鐣欙級 鈹€鈹€
     DONATION_API_TOKEN: str = os.getenv("DONATION_API_TOKEN", "")
     PAYMENT_MODE: str = os.getenv("PAYMENT_MODE", "test")  # test / production
+    # ?? ??? (EPay) ??
+    EPAY_PID: str = os.getenv("EPAY_PID", "")
+    EPAY_KEY: str = os.getenv("EPAY_KEY", "")
+    EPAY_URL: str = os.getenv("EPAY_URL", "https://pay.example.com/submit.php")
+    EPAY_NOTIFY_URL: str = os.getenv("EPAY_NOTIFY_URL", "")
 
     # 鈹€鈹€ 閫熺巼闄愬埗 鈹€鈹€
     RATE_LIMIT_ENABLED: bool = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"

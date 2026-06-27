@@ -141,9 +141,13 @@ async def handle_paywall_callback(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
 
     user_id = query.from_user.id
-    data = query.data.replace("pay:", "").split(":")
+    data = query.data.replace("pay:", "").split(":", 1)
     role_id = data[0]
-    tier = int(data[1])
+    try:
+        tier = int(data[1])
+    except (ValueError, IndexError):
+        await query.answer("? ???????", show_alert=True)
+        return
 
     paywalls = get_paywall(role_id)
     pw = next((p for p in paywalls if p["tier"] == tier), None)

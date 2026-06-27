@@ -51,32 +51,67 @@ async def cmd_gift_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=_gift_keyboard(),
     )
 
-
 async def gift_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """处理礼物购买回调"""
+    """Handle gift purchase ? test mode free, production = EPay"""
     query = update.callback_query
     await query.answer()
 
     gift_id = query.data.replace("gift:", "")
     gift = next((g for g in GIFTS if g["id"] == gift_id), None)
     if not gift:
-        await query.edit_message_text("❌ 未知礼物。")
+        await query.edit_message_text("? ?????")
         return
 
     user_id = query.from_user.id
     db.create_user(user_id)
 
     if db.has_gift(user_id, gift_id):
-        await query.answer("你已经拥有这个礼物了～", show_alert=True)
+        await query.answer("???????????", show_alert=True)
         return
 
-    # 记录购买（实际支付接口预留）
-    db.add_gift_purchase(user_id, gift_id, gift["name"], gift["price"])
-    logger.info(f"gift purchased user_id={user_id} gift={gift_id} price={gift['price']}")
+    gift_name = gift["name"]
+    gift_price = gift["price"]
+
+    # ?? Test mode: free ??
+    if config.PAYMENT_MODE == "test":
+        import uuid, time
+        oid = f"GF{int(time.time())}{uuid.uuid4().hex[:6].upper()}"
+        db.create_payment_order(oid, user_id, "gift", gift_name, gift_price, 0)
+        db.mark_order_paid(oid)
+        db.add_gift_purchase(user_id, gift_id, gift_name, gift_price)
+        logger.info(f"TEST gift: user={user_id} gift={gift_id}")
+        await query.edit_message_text(
+            f"?? ????{gift_name}\n"
+            f"?? ?{gift_price}\n\n"
+            f"????????~\n\n"
+            f"?? ?????????"
+        )
+        return
+
+    # ?? Production: EPay payment ??
+    import hashlib
+    from urllib.parse import urlencode
+    from handlers.payment import _generate_order_id, EPAY_PID, EPAY_KEY, EPAY_URL, EPAY_NOTIFY_URL
+
+    oid = _generate_order_id()
+    db.create_payment_order(oid, user_id, "gift", gift_name, gift_price, 0)
+
+    params = {
+        "pid": EPAY_PID,
+        "type": "alipay",
+        "out_trade_no": oid,
+        "notify_url": EPAY_NOTIFY_URL,
+        "name": gift_name,
+        "money": str(gift_price),
+    }
+    sign_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + EPAY_KEY
+    params["sign"] = hashlib.md5(sign_str.encode()).hexdigest()
+    params["sign_type"] = "MD5"
+    pay_url = f"{EPAY_URL}?{urlencode(params)}"
 
     await query.edit_message_text(
-        f"🎁 购买成功！\n\n"
-        f"礼物：{gift['name']}\n"
-        f"金额：¥{gift['price']}\n\n"
-        f"💝 她收到你的心意一定会很开心的～"
+        f"?? {gift_name}\n"
+        f"?? ?{gift_price}\n\n"
+        f"?? [????]({pay_url})\n\n"
+        f"??????????"
     )

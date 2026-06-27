@@ -88,6 +88,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self._send_health()
         elif self.path == "/health/json":
             self._send_health_json()
+        elif self.path.startswith("/payment/callback"):
+            self._handle_epay_callback()
         else:
             self.send_error(404)
 
@@ -112,6 +114,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 logger.error(f"webhook processing failed role={role_id}: {e}")
                 self.send_error(500)
+        elif self.path.startswith("/payment/callback"):
+            self._handle_epay_callback()
         else:
             self.send_error(404)
 
@@ -142,6 +146,37 @@ class WebhookHandler(BaseHTTPRequestHandler):
             "users": user_count,
             "provider": config.LLM_PROVIDER,
         }).encode())
+
+    def _handle_epay_callback(self):
+        """Receive EPay async payment notification"""
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            from urllib.parse import parse_qs
+            params = parse_qs(body)
+            order_id = params.get("out_trade_no", [None])[0]
+            trade_status = params.get("trade_status", [None])[0]
+            if order_id and trade_status == "TRADE_SUCCESS":
+                # Check if this is a gift order
+                order = db.get_payment_order(order_id)
+                if order and order["role_id"] == "gift":
+                    db.mark_order_paid(order_id)
+                    # Add the gift
+                    gift_name = order.get("item_name", "")
+                    gift_id = gift_name  # fallback
+                    db.add_gift_purchase(order["user_id"], gift_id, gift_name, order["amount"])
+                    logger.info(f"EPay gift callback: {gift_name} for user {order['user_id']}")
+                else:
+                    db.mark_order_paid(order_id)
+                logger.info(f"EPay callback: order {order_id} paid OK")
+            else:
+                logger.warning(f"EPay callback: order={order_id} status={trade_status}")
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"success")
+        except Exception as e:
+            logger.error(f"EPay callback error: {e}")
+            self.send_error(500)
 
     def log_message(self, format, *args):
         pass  # Suppress default HTTP logs
