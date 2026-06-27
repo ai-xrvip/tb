@@ -1,6 +1,5 @@
 ﻿"""
 Speech-to-text via Cloudflare Workers AI (free, ~3000 req/day)
-Converts OGG (Telegram voice) -> WAV (ffmpeg) -> int array -> Cloudflare Whisper
 """
 import io
 import random
@@ -14,11 +13,11 @@ from config import config
 from utils.logger import logger
 
 MAX_VOICE_DURATION = 60
-STT_TIMEOUT = 15
+STT_TIMEOUT = 20
 
 
-async def _ogg_to_wav_bytes(ogg_bytes: bytes) -> bytes:
-    """Convert OGG/Opus to 16kHz mono WAV using ffmpeg, return WAV bytes"""
+async def _ogg_to_wav_array(ogg_bytes: bytes) -> list[int] | None:
+    """Convert OGG -> 8kHz mono WAV -> flat int array (full WAV with header)"""
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as inf, \
          tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as outf:
         inf.write(ogg_bytes)
@@ -29,22 +28,27 @@ async def _ogg_to_wav_bytes(ogg_bytes: bytes) -> bytes:
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y", "-i", inf_path,
-            "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000",
+            "-acodec", "pcm_s16le", "-ac", "1", "-ar", "8000",
             "-f", "wav", out_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
-            logger.error(f"ffmpeg convert failed: {stderr.decode()[:200]}")
-            return b""
+            logger.error(f"ffmpeg failed: {stderr.decode()[:200]}")
+            return None
 
         wav_bytes = Path(out_path).read_bytes()
         if len(wav_bytes) < 100:
-            logger.error("ffmpeg produced empty WAV")
-            return b""
-        logger.info(f"OGG->WAV: {len(ogg_bytes)} -> {len(wav_bytes)} bytes")
-        return wav_bytes
+            logger.error("ffmpeg: empty output")
+            return None
+
+        logger.info(f"OGG {len(ogg_bytes)}B -> WAV {len(wav_bytes)}B (8kHz mono)")
+        # Send FULL WAV (with header) as int array
+        return list(wav_bytes)
+    except FileNotFoundError:
+        logger.error("ffmpeg not found! Is it installed in the container?")
+        return None
     finally:
         try:
             Path(inf_path).unlink(missing_ok=True)
@@ -57,20 +61,13 @@ async def _ogg_to_wav_bytes(ogg_bytes: bytes) -> bytes:
 
 
 async def _transcribe_cf(ogg_bytes: bytes) -> str | None:
-    """Cloudflare Workers AI Whisper — sends WAV as int array (NOT base64!)"""
+    """Send WAV int array to Cloudflare Whisper"""
     if not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN:
         return None
 
-    wav_bytes = await _ogg_to_wav_bytes(ogg_bytes)
-    if not wav_bytes:
-        logger.error("STT: OGG->WAV conversion failed")
+    audio_array = await _ogg_to_wav_array(ogg_bytes)
+    if not audio_array:
         return None
-
-    # Cloudflare expects audio as an array of integers, not base64!
-    # Send only the PCM data (skip WAV header) to keep payload smaller
-    # WAV header is 44 bytes; rest is raw PCM samples
-    pcm_offset = 44
-    audio_array = list(wav_bytes[pcm_offset:])
 
     url = f"https://api.cloudflare.com/client/v4/accounts/{config.CF_ACCOUNT_ID}/ai/run/@cf/openai/whisper"
 
@@ -78,27 +75,30 @@ async def _transcribe_cf(ogg_bytes: bytes) -> str | None:
         async with httpx.AsyncClient(timeout=STT_TIMEOUT) as client:
             resp = await client.post(
                 url,
-                headers={"Authorization": f"Bearer {config.CF_API_TOKEN}"},
+                headers={
+                    "Authorization": f"Bearer {config.CF_API_TOKEN}",
+                    "Content-Type": "application/json",
+                },
                 json={"audio": audio_array},
             )
-            logger.info(f"CF STT response: HTTP {resp.status_code}")
+            logger.info(f"CF STT: HTTP {resp.status_code}, body_len={len(resp.text)}")
 
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success"):
                     result = data.get("result", {})
-                    text = result.get("text", "") if isinstance(result, dict) else ""
-                    if text:
-                        logger.info(f"CF STT ok: {text[:80]}")
-                        return text
-                    else:
-                        logger.warning(f"CF STT: empty text. Result: {str(result)[:200]}")
+                    text = result.get("text", "") if isinstance(result, dict) else str(result)
+                    text = text.strip()
+                    logger.info(f"CF STT text: [{text}]")
+                    return text if text else None
                 else:
-                    logger.warning(f"CF STT: success=false, errors={data.get('errors')}")
+                    logger.warning(f"CF STT errors: {data.get('errors')}")
             else:
-                logger.warning(f"CF STT HTTP {resp.status_code}: {resp.text[:300]}")
+                logger.warning(f"CF STT HTTP {resp.status_code}: {resp.text[:400]}")
+    except httpx.TimeoutException:
+        logger.error("CF STT timeout")
     except Exception as e:
-        logger.error(f"CF STT exception: {e}")
+        logger.error(f"CF STT exception: {type(e).__name__}: {e}")
 
     return None
 
@@ -131,12 +131,11 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     role_id = context.bot_data.get("role_id", "xiaolu")
+    user_id = update.effective_user.id if update.effective_user else 0
 
     duration = msg.voice.duration
     if duration > MAX_VOICE_DURATION:
-        await update.message.reply_text(
-            f"🎤 语音太长啦（超过{MAX_VOICE_DURATION}秒），发短一点吧~"
-        )
+        await update.message.reply_text(f"🎤 语音太长啦（超过{MAX_VOICE_DURATION}秒），发短一点吧~")
         return
 
     if not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN:
@@ -149,17 +148,23 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await voice_file.download_to_memory(buf)
         ogg_bytes = buf.getvalue()
 
-        logger.info(f"Voice: user={update.effective_user.id}, size={len(ogg_bytes)}B, dur={duration}s")
+        if len(ogg_bytes) < 100:
+            logger.warning(f"Voice too small: {len(ogg_bytes)} bytes")
+            await update.message.reply_text(_get_stt_error(role_id))
+            return
+
+        logger.info(f"Voice recv: user={user_id}, bytes={len(ogg_bytes)}, dur={duration}s")
 
         text = await _transcribe_cf(ogg_bytes)
 
-        if text and text.strip():
+        if text:
+            logger.info(f"Voice -> text: [{text[:100]}]")
             msg.text = text
             from handlers.messages import handle_message
             await handle_message(update, context)
         else:
+            logger.warning(f"Voice transcribe returned None for user={user_id}")
             await update.message.reply_text(_get_stt_error(role_id))
     except Exception as e:
-        logger.error(f"voice error: {e}")
+        logger.error(f"Voice handler error user={user_id}: {type(e).__name__}: {e}", exc_info=True)
         await update.message.reply_text(_get_stt_error(role_id))
-
