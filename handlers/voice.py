@@ -163,7 +163,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if text:
             logger.info(f"Voice -> text: [{text[:100]}]")
-            msg.text = text
+            object.__setattr__(msg, 'text', text)  # bypass frozen Message
             from handlers.messages import handle_message
             await handle_message(update, context)
         else:
@@ -172,3 +172,4 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"Voice handler error user={user_id}: {type(e).__name__}: {e}", exc_info=True)
         await update.message.reply_text(_get_stt_error(role_id))
+
