@@ -472,8 +472,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             clean_reply = mood_emoji + " " + clean_reply
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
-    delay = _calculate_reply_delay(user_id, role_id, len(clean_reply), user_resp_time)
-    await asyncio.sleep(delay)
+    # delay disabled per user request
+    # await asyncio.sleep(delay)
 
     if clean_reply:
         await update.message.reply_text(clean_reply)
@@ -488,7 +488,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 trigger_rate=config.TTS_TRIGGER_RATE,
             )
             if voice_data:
-                await asyncio.sleep(random.uniform(0.5, 2.0))
+                # delay disabled
                 await update.message.reply_voice(voice_data)
         except Exception as tts_err:
             logger.error(f"TTS failed for {role_id}: {tts_err}")
