@@ -36,19 +36,7 @@ def _get_date_str() -> str:
 
 
 def resolve_template(system_prompt: str, **kwargs) -> str:
-    """解析模板变量，替换为实时值
-
-    支持的变量：
-      {time}       - 当前时段（清晨/上午/下午/晚上/深夜）
-      {date}       - 当前日期（2026年6月26日）
-      {weekday}    - 星期几
-      {weather}    - 角色所在城市天气
-      {user_name}  - 用户名字
-      {mood}       - 当前心情
-      {relationship} - 关系等级
-      {role_name}  - 角色名字
-      {city}       - 角色所在城市名
-    """
+    """解析模板变量，替换为实时值"""
     role_id = kwargs.get("role_id", "xiaolu")
     user_name = kwargs.get("user_name", "宝贝")
     mood_str = kwargs.get("mood", "")
@@ -85,8 +73,8 @@ def resolve_system_prompt(role: dict, user_name: str = "宝贝", mood_str: str =
     role_id = role.get("id", "xiaolu")
     role_name = role.get("name", "")
     prompt = role.get("system_prompt", "")
-    # Add emoji instruction
-    prompt += "\n\n【表情使用规则】\n可以使用Telegram原生emoji表情符号(如☺❤️✨😉💕🎀🌟😜🤭🥰😘💋🔥👀💦💋)或颜文字(如(^∇^)、(*/ω＼*)、(>～<)等)来增加表达力，让回复更生动。\n"
+    # Emoji instruction - Telegram emoji only, no kaomoji
+    prompt += "\n\n【表情使用规则】\n使用Telegram原生emoji表情符号(如☺❤️✨😉💕🎀🌟😜🤭🥰😘💋🔥👀💦💋)来表达情感。结尾可以加1-2个适合语境的emoji。\n禁止使用任何颜文字/kaomoji（如 (^∇^)、(*/ω＼*)、(>～<)、qwq、QAQ 等），颜文字会破坏聊天气氛。\n"
     return resolve_template(
         prompt,
         role_id=role_id,

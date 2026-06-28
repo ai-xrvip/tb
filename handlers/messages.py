@@ -551,21 +551,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if prev_msg_time:
         user_resp_time = _time.time() - prev_msg_time
     
-    # ── 情感可视化：根据心情附加表情前缀 ──
-    mood_emoji = ""
+    # ── 情感可视化（仅记录心情，不在回复前加表情）──
+    mood = {"id": "neutral"}
     try:
         mood = get_mood_for_user(user_id, role_id)
-        mood_map = {
-            "happy": "😊", "tired": "😮‍💨", "sleepy": "😴", "sad": "😢",
-            "playful": "😝", "sexy": "😏", "angry": "😤", "neutral": "",
-            "period": "😣",
-        }
-        mood_emoji = mood_map.get(mood.get("id", ""), "")
-        if mood_emoji:
-            clean_reply = mood_emoji + " " + clean_reply
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
-        mood = {"id": "neutral"}
     # delay disabled per user request
     # await asyncio.sleep(delay)
 
