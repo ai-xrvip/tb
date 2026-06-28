@@ -55,14 +55,17 @@ def _get_reference_b64(role_id: str) -> str | None:
     # Try CDN first
     urls = _get_reference_urls(role_id)
     random.shuffle(urls)
+    logger.info(f"Trying {len(urls)} reference URLs for role {role_id}")
     for url in urls:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Bot/1.0"})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = resp.read()
             if resp.status == 200 and len(data) > 500 and len(data) < 300_000:
-                logger.info(f"Reference from CDN: {url}")
+                logger.info(f"Reference loaded from CDN: {url} ({len(data)} bytes)")
                 return base64.b64encode(data).decode("ascii")
+            else:
+                logger.warning(f"CDN ref {url}: status={resp.status} size={len(data)}")
         except Exception:
             continue
 
@@ -118,9 +121,14 @@ async def generate_image(prompt: str, role_id: str = "") -> bytes | None:
     # Try with reference photo first (img2img)
     ref_b64 = _get_reference_b64(role_id)
     if ref_b64:
+        logger.info(f"img2img with reference ({len(ref_b64)} chars base64)")
         result = await _pollinations_img2img(visual_prompt, ref_b64)
         if result:
+            logger.info(f"img2img success: {len(result)} bytes")
             return result
+        logger.warning("img2img failed, falling back to txt2img")
+    else:
+        logger.info("No reference photo available, using txt2img")
 
     # Fallback: text-to-image without reference
     result = await _pollinations_txt2img(visual_prompt)
@@ -144,7 +152,7 @@ async def _pollinations_img2img(prompt: str, ref_b64: str) -> bytes | None:
         url = (
             POLLINATIONS_URL + "/" + encoded
             + "?image=" + urllib.parse.quote(ref_uri, safe="")
-            + "&strength=0.5&nologo=true&width=1024&height=1024"
+            + "&strength=0.75&nologo=true&width=1024&height=1024"
         )
         async with httpx.AsyncClient(timeout=GEN_TIMEOUT, follow_redirects=True) as client:
             resp = await client.get(url)
