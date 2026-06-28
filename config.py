@@ -52,7 +52,7 @@ class Config:
     ENABLE_STREAMING: bool = os.getenv("ENABLE_STREAMING", "true").lower() == "true"
 
     # Image Generation (OpenAI-compatible)
-    IMAGE_GEN_ENABLED: bool = os.getenv("IMAGE_GEN_ENABLED", "false").lower() == "true"
+    IMAGE_GEN_ENABLED: bool = os.getenv("IMAGE_GEN_ENABLED", "true").lower() == "true"
     IMAGE_GEN_API_KEY: str = os.getenv("IMAGE_GEN_API_KEY", "")
     IMAGE_GEN_BASE_URL: str = os.getenv("IMAGE_GEN_BASE_URL", "https://api.openai.com/v1")
     IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "gpt-image-2")
