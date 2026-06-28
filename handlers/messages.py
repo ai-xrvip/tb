@@ -36,6 +36,7 @@ from providers import get_provider, ProviderType
 from providers.base import ProviderError, RateLimitError, TokenLimitError
 from prompt_template import resolve_system_prompt
 from providers.tts import generate_role_voice
+from image_gen import generate_image
 
 
 # ── 角色化等待/报错话术 ──
@@ -635,22 +636,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ?? Smart image matching (keyword-based) ??
     media_path = _pick_media_by_context(role_id, full_reply)
-    # ?? Smart image matching (keyword-based, no AI tags needed) ??
-    media_path = _pick_media_by_context(role_id, full_reply)
-    if not media_path:
-        for tag in MEDIA_TAG_RE.findall(full_reply):
-            media_path = _pick_media(role_id, tag, user_id)
-            if media_path:
-                break
-    if media_path:
+    # ?? Image generation (img2img via Pollinations.ai) ??
+    if clean_reply:
+        role_name = role.get("name", "")
         try:
-            with open(media_path, "rb") as f:
-                if media_path.lower().endswith(".mp4"):
-                    await update.message.reply_video(f)
-                else:
-                    await update.message.reply_photo(f)
+            # Only generate for visual topics (keywords present)
+            visual_kw = ["?", "?", "?", "?", "JK", "??", "cos", "??", "??", "??", "??", "??", "?", "??"]
+            if any(kw in clean_reply for kw in visual_kw) and random.random() < 0.3:
+                img_data = await generate_image(clean_reply, role_id, role_name)
+                if img_data:
+                    await update.message.reply_photo(img_data)
         except Exception as e:
-            logger.error(f"send media failed {media_path}: {e}")
+            logger.error(f"img2img failed: {e}")
 
     db.update_chat_history(user_id, history)
 
