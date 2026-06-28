@@ -43,7 +43,7 @@ from handlers.payment import handle_paywall_callback
 from handlers.conversation import cmd_clear, cmd_export, cmd_reset, cmd_retry
 from handlers.yuanwei import get_yuanwei_conversation_handler, handle_yuanwei_callback
 from handlers.keepsake import get_keepsake_conversation_handler, handle_keepsake_callback
-from handlers.moments import send_moment_broadcast, handle_moment_reply, handle_moment_say, MOMENTS_INTERVAL_MIN, MOMENTS_INTERVAL_MAX
+from handlers.moments import send_moment_broadcast, MOMENTS_INTERVAL_MIN, MOMENTS_INTERVAL_MAX
 from handlers.testimonial import cmd_screenshot, cmd_post_testimonial
 
 # ── Shared shutdown flag ──
@@ -276,8 +276,6 @@ def build_single_bot(role_id: str, token: str) -> Application:
     app.add_handler(CallbackQueryHandler(handle_yuanwei_callback, pattern="^yw_"))
     app.add_handler(CallbackQueryHandler(handle_keepsake_callback, pattern="^ks_"))
     app.add_handler(CallbackQueryHandler(gift_callback, pattern="^gift_"))
-    app.add_handler(CallbackQueryHandler(handle_moment_reply, pattern="^moment_"))
-    app.add_handler(CallbackQueryHandler(handle_moment_say, pattern="^momentsay_"))
 
     # ── Error ──
     app.add_error_handler(error_handler)
