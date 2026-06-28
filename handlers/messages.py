@@ -303,6 +303,20 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
+    # 注入用户解锁等级
+    try:
+        user_tier = db.get_unlock_tier(user_id, role_id)
+        tier_hints = {
+            0: "用户解锁等级0，只能看日常/自拍/穿搭等基础内容。可以暗示聊更多就能看更多照片哦~",
+            1: "用户解锁等级1，可以看姿态/游泳/丝袜等内容。不要提更高级内容。",
+            2: "用户解锁等级2，可以看性感/沐浴/情趣等内容。不要提更高级内容。",
+            3: "用户解锁等级3，所有内容均可发送。",
+        }
+        hint = tier_hints.get(user_tier, tier_hints[0])
+        messages.append({"role": "system", "content": f"【用户等级】{hint}【重要】不要主动提及或承诺发送超出用户等级的内容。可以委婉地引导用户多聊天来解锁更多内容。"})
+    except Exception as e:
+        logger.debug(f"Non-critical: {e}")
+
     try:
         mood_prompt = get_mood_prompt(user_id, role_id)
         if mood_prompt:
