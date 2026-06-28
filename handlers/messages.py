@@ -585,47 +585,60 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    # -- Smart photo flow: background pre-generation + conversational delivery --
+        # -- Photo logic: 3 modes (explicit request / active inquiry / local match) --
     try:
         _pending_gen = context.bot_data.setdefault("_pending_photo", {})
-        
-        # Check if user is confirming a pending photo offer
-        if user_id in _pending_gen:
-            affirm_kw = ["好", "要", "看", "发", "可以", "行", "来", "yes", "ok", "嗯", "快", "show"]
+
+        # Mode 1: User explicitly asking for photos -> generate + send now
+        request_kw = [
+            "发张", "看看你",
+            "照片", "自拍", "写真",
+            "jk照", "泳装", "泳衣",
+            "丝袜", "cos", "拍一张",
+        ]
+        if any(kw in user_text for kw in request_kw):
+            asyncio.create_task(_generate_and_send(update, "", role_id, role.get("name", "")))
+
+        # Mode 2: Pending photo confirmation
+        elif user_id in _pending_gen:
+            affirm_kw = ["好", "要", "看", "发", "可以",
+                         "行", "来", "yes", "ok", "嗯", "快", "show"]
             if any(kw in user_text for kw in affirm_kw):
                 pending = _pending_gen.pop(user_id)
                 try:
                     await update.message.reply_text(random.choice([
-                        "稍等哦～我找找啊... 🔍",
-                        "等一下下～翻箱倒柜中... 👗",
-                        "嘿嘿，让我找找最好看的那张... ✨",
+                        "稍等哦～我找找啊...",
+                        "等一下下～翻箱倒柜中...",
+                        "嘿嘿，让我找找...",
                     ]))
                     await update.message.reply_photo(pending)
-                except Exception as e:
-                    logger.error(f"Failed to send pending photo: {e}")
+                except Exception:
+                    pass
             else:
                 _pending_gen.pop(user_id, None)
-        
-        # Keyword-based image matching (local media)
-        media_path = _pick_media_by_context(role_id, full_reply)
-        if media_path:
-            try:
-                with open(media_path, "rb") as f:
-                    await update.message.reply_photo(f.read())
-            except Exception:
-                pass
-        
-        # Background pre-generation: if AI reply hints at offering photos
+
+        # Mode 3: Local media match (fast, no generation)
+        else:
+            media_path = _pick_media_by_context(role_id, full_reply)
+            if media_path:
+                try:
+                    with open(media_path, "rb") as _mf:
+                        await update.message.reply_photo(_mf.read())
+                except Exception:
+                    pass
+
+        # Background pre-generation: AI offers photo -> generate for next turn
         if clean_reply:
-            role_name = role.get("name", "")
-            offer_kw = ["要看吗", "想看吗", "给你看", "发你看", "给你拍", "照片", "自拍", "写真"]
+            offer_kw = ["要看吗", "想看吗",
+                        "给你看", "发你看",
+                        "给你拍"]
             if any(kw in clean_reply for kw in offer_kw):
-                asyncio.create_task(_pregenerate_photo(update, user_id, clean_reply, role_id, role_name, _pending_gen))
+                asyncio.create_task(_pregenerate_photo(update, user_id, clean_reply, role_id, role.get("name", ""), _pending_gen))
 
     except Exception as e:
         logger.error(f"Photo flow error: {e}")
 
-    # -- Post-reply cleanup (wrapped to prevent error propagation) --
+# -- Post-reply cleanup (wrapped to prevent error propagation) --
     try:
         messages.append({"role": "assistant", "content": full_reply})
         db.update_chat_history(user_id, messages)
