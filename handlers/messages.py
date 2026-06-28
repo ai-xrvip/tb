@@ -210,7 +210,7 @@ def _media_allowed(role_id: str, category: str, user_id: int) -> bool:
     user_tier = db.get_unlock_tier(user_id, role_id)
     return user_tier >= required_tier
 
-def _pick_media(role_id: str, tag: str, user_id: int) -> Optional[str]:
+def _pick_media(role_id: str, tag: str, user_id: int) -> str | None:
     """Pick a random image from a media folder. Supports tag + keyword fallback."""
     import random
     media_base = Path(__file__).parent.parent / "media"
@@ -231,6 +231,47 @@ def _pick_media(role_id: str, tag: str, user_id: int) -> Optional[str]:
     return str(random.choice(files))
 
 
+def _smart_folder_match(role_id: str, text: str) -> str | None:
+    """Match conversation text to best available media folder by keyword scoring."""
+    media_base = Path(__file__).parent.parent / "media"
+    role_dir = media_base / role_id
+    text_lower = text.lower()
+    best_folder = None
+    best_score = 0
+    folder_keywords = {
+        "JK": ["jk", "??", "??", "???", "???"],
+        "Cos": ["cos", "cosplay", "??", "??"],
+        "??": ["??", "??", "??", "??"],
+        "??": ["??", "??", "??", "??", "ootd", "look"],
+        "??": ["??", "??", "??", "??", "??"],
+        "??": ["??", "??", "??", "??", "?"],
+        "??": ["??", "??", "??", "??"],
+        "??": ["??", "??", "??"],
+        "??": ["??", "?", "??"],
+        "??": ["??", "??"],
+        "??": ["??", "?"],
+        "??": ["??", "?", "?", "??", "??"],
+        "??": ["??", "??", "??", "??"],
+    }
+    for folder_name, keywords in folder_keywords.items():
+        score = sum(len(kw) for kw in keywords if kw in text_lower)
+        if score > best_score and (role_dir / folder_name).is_dir():
+            best_score = score
+            best_folder = folder_name
+    return best_folder
+
+
+def _pick_media_by_context(role_id: str, reply_text: str) -> str | None:
+    """Pick a relevant image based on what the AI said."""
+    import random
+    folder = _smart_folder_match(role_id, reply_text)
+    if folder:
+        media_base = Path(__file__).parent.parent / "media"
+        folder_path = media_base / role_id / folder
+        files = [p for p in folder_path.glob("*") if p.suffix.lower() in (".jpg",".jpeg",".png",".webp")]
+        if files:
+            return str(random.choice(files))
+    return None
 def _smart_folder_match(role_id: str, text: str) -> Optional[str]:
     """Match conversation text to best available media folder by keyword scoring."""
     media_base = Path(__file__).parent.parent / "media"
@@ -354,6 +395,23 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     except Exception:
         pass
     messages.append({"role": "system", "content": conv_rules})
+
+    # ?? Inject available media tags ??
+    try:
+        from media_tags import get_tags_for_role
+        role_tags = get_tags_for_role(role_id)
+        available = []
+        media_dir = Path(__file__).parent.parent / "media" / role_id
+        for tag, cfg in role_tags.items():
+            folder = media_dir / cfg["folder"]
+            has_files = folder.is_dir() and any(f.suffix.lower() in (".jpg",".jpeg",".png",".webp") for f in folder.iterdir())
+            if has_files:
+                available.append(tag)
+        if available:
+            media_instruction = "\n\n????????????????????????? [media:???]?\n?????" + ", ".join(available) + "\n???????????????????"
+            messages.append({"role": "system", "content": media_instruction})
+    except Exception:
+        pass
 
         # 加载旧的摘要
     summaries = db.get_chat_summaries(user_id)
@@ -576,6 +634,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     # ?? Smart image matching (keyword-based) ??
+    media_path = _pick_media_by_context(role_id, full_reply)
+    # ?? Smart image matching (keyword-based, no AI tags needed) ??
     media_path = _pick_media_by_context(role_id, full_reply)
     if not media_path:
         for tag in MEDIA_TAG_RE.findall(full_reply):
