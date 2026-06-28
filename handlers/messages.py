@@ -347,7 +347,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
         for tag, cfg in role_tags.items():
             folder = media_dir / cfg["folder"]
             if folder.is_dir() and any(f.suffix.lower() in (".jpg",".jpeg",".png",".webp") for f in folder.iterdir()):
-                available.append(f"{tag}({cfg["folder"]})")
+                available.append(f"{tag}({cfg['folder']})")
         if available:
             media_instruction = "\n\n??????????\n????????????????????? [media:JK] ? [media:??]?\n????????" + ", ".join(available) + "\n????????????????????"
             messages.append({"role": "system", "content": media_instruction})
