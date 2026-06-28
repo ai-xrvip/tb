@@ -136,7 +136,7 @@ def _build_visual_prompt(text, role_id=''):
     char_desc = _get_character_desc(role_name)
     text = text.strip()[:300]
     quality = 'high quality, photorealistic, soft natural lighting, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece'
-    return char_desc + ', ' + quality + ' -- scene: ' + text
+    return char_desc + ', ' + quality + ' -- same person as reference photo, identical face, identical features, cosplay photography -- scene: ' + text
 
 async def generate_image(prompt, role_id=''):
     if not config.IMAGE_GEN_ENABLED:
@@ -165,7 +165,7 @@ async def _pollinations_img2img(prompt, ref_url, negative=''):
         encoded = urllib.parse.quote(prompt, safe='')
         params = (
             '?image=' + urllib.parse.quote(ref_url, safe='')
-            + '&strength=0.45&nologo=true&width=1024&height=1024'
+            + '&strength=0.25&nologo=true&model=flux&width=1024&height=1024'
             + '&seed=' + str(random.randint(1, 2147483647))
         )
         if negative:
