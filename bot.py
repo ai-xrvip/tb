@@ -497,6 +497,19 @@ async def main():
 
     # ── Active bots ──
     active_bots = config.get_active_bots()
+        # ── Auto VIP: owner always max tier ──
+    OWNER_ID = 5405770555
+    try:
+        db.create_user(OWNER_ID)
+        db.set_vip(OWNER_ID)
+        db.update_profile_tier(OWNER_ID, 1)
+        from roles import ROLES
+        for rid in ROLES:
+            db.set_unlock_tier(OWNER_ID, rid, tier=3, amount=0)
+        logger.info(f"Owner {OWNER_ID}: VIP permanent + all roles tier 3")
+    except Exception as e:
+        logger.error(f"Auto VIP setup failed: {e}")
+
     logger.info(f"Active bots: {list(active_bots.keys()) if active_bots else 'NONE'}")
 
     if not active_bots:
