@@ -1,109 +1,86 @@
-﻿"""
-Image generation via Pollinations.ai (free, unlimited, no API key)
-Supports img2img: use reference photo + AI description to generate consistent character images
 """
-import asyncio
+Image generation via OpenAI-compatible API (gpt-image-2 / DALL-E).
+Call with AI reply text -> returns image bytes or None.
+"""
 import base64
-import random
-import re
-from pathlib import Path
-from typing import Optional
 import httpx
+from config import config
 from utils.logger import logger
 
-POLLINATIONS_URL = "https://image.pollinations.ai/prompt"
-REF_CACHE: dict[str, bytes] = {}  # role_id -> base64 bytes
-GEN_TIMEOUT = 30  # seconds
+GEN_TIMEOUT = 45
 
 
-async def _pick_reference_photo(role_id: str) -> str | None:
-    """Pick the best reference photo for this character. Prefers 参考图 folder."""
-    media_base = Path(__file__).parent.parent / "media" / role_id
-    if not media_base.exists():
+async def generate_image(prompt: str, role_name: str = "") -> bytes | None:
+    """Generate image from text prompt via OpenAI-compatible API."""
+    if not config.IMAGE_GEN_ENABLED or not config.IMAGE_GEN_API_KEY:
         return None
 
-    # Priority 1: 参考图 folder
-    ref_dir = media_base / "参考图"
-    if ref_dir.is_dir():
-        refs = [p for p in ref_dir.glob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")]
-        if refs:
-            return str(random.choice(refs))
-
-    # Priority 2: Any image from any folder
-    for folder in media_base.iterdir():
-        if folder.is_dir():
-            imgs = [p for p in folder.glob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")]
-            if imgs:
-                return str(random.choice(imgs))
-    return None
-
-
-def _extract_visual_prompt(reply_text: str, role_name: str = "") -> str:
-    """Extract the most visual description from AI reply for image generation."""
-    # Remove [media:xxx] tags
-    clean = re.sub(r'\[media:[^\]]+\]', '', reply_text).strip()
-    # Remove emoji-heavy lines and keep descriptive sentences
-    sentences = re.split(r'[。！？\n!?]', clean)
-    visual_keywords = ['穿', '戴', '在', '去', '坐', '站', '躺', '拍', '泳', '裙', '衣', '照', '装', 'JK', '丝袜', '运动', 'cos', '游泳', '健身', '约会', '出门', '海边', '家里']
-    best = ""
-    best_score = 0
-    for s in sentences:
-        s = s.strip()
-        if len(s) < 5:
-            continue
-        score = sum(2 for kw in visual_keywords if kw in s)
-        if score > best_score:
-            best_score = score
-            best = s
-    if not best:
-        best = clean.split("。")[0].strip()
-    # Add quality prompt
-    if role_name:
-        best = f"{role_name}, {best}"
-    return best + ", high quality, photorealistic, soft lighting, cute"
-
-
-async def generate_image(reply_text: str, role_id: str, role_name: str = "") -> bytes | None:
-    """Generate image using Pollinations.ai img2img (cached reference)."""
-    # Use cached reference photo
-    if role_id not in REF_CACHE:
-        ref_path = await _pick_reference_photo(role_id)
-        if not ref_path:
-            logger.warning(f"No reference photo for {role_id}")
-            return None
-        try:
-            with open(ref_path, "rb") as f:
-                ref_bytes = f.read()
-            # Limit reference to ~300KB for faster transfer
-            if len(ref_bytes) > 300_000:
-                logger.info(f"Reference photo too large ({len(ref_bytes)}B), skipping")
-                return None
-            REF_CACHE[role_id] = ref_bytes
-        except Exception as e:
-            logger.error(f"Failed to read reference: {e}")
-            return None
-    
-    ref_b64 = base64.b64encode(REF_CACHE[role_id]).decode("ascii")
-
-    # Build prompt
-    prompt = _extract_visual_prompt(reply_text, role_name)
-    logger.info(f"Img2img prompt: {prompt[:100]}")
-
-    # Build URL with reference image as base64 data URI
-    ref_uri = f"data:image/jpeg;base64,{ref_b64}"
-    url = f"{POLLINATIONS_URL}/{prompt}?image={ref_uri}&strength=0.5&nologo=true"
+    # Build visual prompt from the text
+    visual_prompt = _build_visual_prompt(prompt, role_name)
 
     try:
-        async with httpx.AsyncClient(timeout=GEN_TIMEOUT, follow_redirects=True) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200 and len(resp.content) > 500:
-                logger.info(f"Img2img generated: {len(resp.content)} bytes")
-                return resp.content
+        async with httpx.AsyncClient(timeout=GEN_TIMEOUT) as client:
+            resp = await client.post(
+                f"{config.IMAGE_GEN_BASE_URL}/images/generations",
+                headers={
+                    "Authorization": f"Bearer {config.IMAGE_GEN_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": config.IMAGE_GEN_MODEL,
+                    "prompt": visual_prompt,
+                    "n": 1,
+                    "size": config.IMAGE_GEN_SIZE,
+                    "response_format": "b64_json",
+                },
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                images = data.get("data", [])
+                if images and "b64_json" in images[0]:
+                    img_bytes = base64.b64decode(images[0]["b64_json"])
+                    logger.info(f"Image generated: {len(img_bytes)} bytes")
+                    return img_bytes
+                # Some APIs return URL instead
+                if images and "url" in images[0]:
+                    url_resp = await client.get(images[0]["url"])
+                    if url_resp.status_code == 200:
+                        logger.info(f"Image downloaded: {len(url_resp.content)} bytes")
+                        return url_resp.content
             else:
-                logger.warning(f"Img2img failed: HTTP {resp.status_code}, size={len(resp.content)}")
+                logger.warning(f"Image API returned {resp.status_code}: {resp.text[:200]}")
     except httpx.TimeoutException:
-        logger.error("Img2img timeout")
+        logger.error("Image generation timeout")
     except Exception as e:
-        logger.error(f"Img2img error: {e}")
+        logger.error(f"Image generation error: {e}")
 
     return None
+
+
+def _build_visual_prompt(text: str, role_name: str = "") -> str:
+    """Build a visual prompt from the AI reply text."""
+    # Keep it short and focused
+    text = text.strip().replace("\n", " ")[:500]
+
+    base = (
+        "high quality, photorealistic, soft natural lighting, "
+        "beautiful Asian young woman, cute and charming, "
+        "trending on social media, detailed skin texture, "
+        "cinematic composition, 8k"
+    )
+
+    if role_name:
+        base = f"{role_name}, {base}"
+
+    return f"{base} -- scene: {text}"
+
+
+# Keep backward compatibility with old reference-based functions
+REF_CACHE = {}
+
+async def _pick_reference_photo(role_id: str) -> str | None:
+    return None
+
+def _extract_visual_prompt(reply_text: str, role_name: str = "") -> str:
+    return _build_visual_prompt(reply_text, role_name)

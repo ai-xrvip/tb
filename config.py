@@ -51,6 +51,13 @@ class Config:
     # 鈹€鈹€ 娴佸紡杈撳嚭 鈹€鈹€
     ENABLE_STREAMING: bool = os.getenv("ENABLE_STREAMING", "true").lower() == "true"
 
+    # Image Generation (OpenAI-compatible)
+    IMAGE_GEN_ENABLED: bool = os.getenv("IMAGE_GEN_ENABLED", "false").lower() == "true"
+    IMAGE_GEN_API_KEY: str = os.getenv("IMAGE_GEN_API_KEY", "")
+    IMAGE_GEN_BASE_URL: str = os.getenv("IMAGE_GEN_BASE_URL", "https://api.openai.com/v1")
+    IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "gpt-image-2")
+    IMAGE_GEN_SIZE: str = os.getenv("IMAGE_GEN_SIZE", "1024x1024")
+
     # 鈹€鈹€ 鍔ㄦ€佸姞杞芥墍鏈?Bot Token 鈹€鈹€
     BOT_TOKENS: dict[str, str] = _load_bot_tokens()
 
