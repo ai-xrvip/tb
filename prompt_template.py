@@ -74,7 +74,7 @@ def resolve_system_prompt(role: dict, user_name: str = "宝贝", mood_str: str =
     role_name = role.get("name", "")
     prompt = role.get("system_prompt", "")
     # Emoji instruction - Telegram emoji only, no kaomoji
-    prompt += "\n\n【表情使用规则】\n使用Telegram原生emoji表情符号(如☺❤️✨😉💕🎀🌟😜🤭🥰😘💋🔥👀💦💋)来表达情感。结尾可以加1-2个适合语境的emoji。\n禁止使用任何颜文字/kaomoji（如 (^∇^)、(*/ω＼*)、(>～<)、qwq、QAQ 等），颜文字会破坏聊天气氛。\n"
+    prompt += "\n\n【表情使用规则】\n在对话中自然地使用Telegram原生emoji表达情感，不要只在结尾加。根据语境选择：😊😄🥰😘(开心/甜蜜) 😢😭💔(难过/伤心) 😳😅🙈(害羞/尴尬) 😤😒🙄(不满/傲娇) 😱😨(惊讶/害怕) 🥺✨💕💋🎀🌟(撒娇/卖萌) 😂🤣(好笑) 🔥👀(火辣/暗示)。\n每条消息至少用1-3个不同的emoji分散在句子中。\n禁止使用颜文字/kaomoji（如 (^∇^)、(*/ω＼*)、qwq、QAQ 等）。\n"
     return resolve_template(
         prompt,
         role_id=role_id,
