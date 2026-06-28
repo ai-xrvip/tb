@@ -1,6 +1,6 @@
 # Image generation - Agnes AI img2img (free tier, 4000 images/day)
 # Reference images scraped from per-role folder/page URLs
-import os, re, time, random, base64, json, httpx
+import os, re, time, random, base64, json, httpx, urllib.request, urllib.parse
 from config import config
 from utils.logger import logger
 
@@ -201,3 +201,4 @@ async def _agnes_img2img(prompt: str, ref_url: str) -> bytes | None:
 
 def _extract_visual_prompt(reply_text, role_name=""):
     return _build_visual_prompt(reply_text, role_name)
+
