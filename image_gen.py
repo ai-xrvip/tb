@@ -1,5 +1,6 @@
-﻿# Image generation via Pollinations.ai img2img using CDN reference URLs
-import os, random, urllib.request, urllib.parse, httpx
+﻿# Image generation via Pollinations.ai img2img
+# Reference images scraped from configurable folder/page URLs (Telegraph, ImgBB, etc.)
+import os, re, time, random, urllib.request, urllib.parse, httpx
 from pathlib import Path
 from config import config
 from utils.logger import logger
@@ -27,13 +28,91 @@ CHARACTER_PREFIX = {
 }
 DEFAULT_CHARACTER = 'beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup, perfect hands'
 
-# Per-role extra negative prompts (merged with global NEGATIVE_PROMPT)
 ROLE_NEGATIVES = {
     'xiaolu': 'nsfw, nude, revealing, skimpy, lingerie, bikini, muscular, tall',
 }
 
-# Fallback reference URLs when GitHub CDN is unavailable (e.g. ImgBB / telegraph)
-FALLBACK_REF_URLS = {}
+# ── Reference image scraping from folder/page URLs ──
+
+# Default: user-provided Telegraph folder. Set IMAGE_REF_FOLDERS env var to override/add.
+_DEFAULT_REF_FOLDERS = [
+    'https://telegra.ph/miko3%E5%A4%8D%E6%B4%BB%E7%89%88-06-27',
+]
+_REF_FOLDERS = os.getenv('IMAGE_REF_FOLDERS', '')
+if _REF_FOLDERS:
+    _REF_FOLDERS = [u.strip() for u in _REF_FOLDERS.split(',') if u.strip()]
+else:
+    _REF_FOLDERS = list(_DEFAULT_REF_FOLDERS)
+
+# Cache: {page_url: (timestamp, [image_urls])}
+_ref_cache = {}
+_CACHE_TTL = 600  # 10 min, avoid re-scraping every request
+
+def _scrape_images_from_page(page_url: str) -> list[str]:
+    """Fetch a Telegraph/page URL and extract all image URLs."""
+    now = time.time()
+    if page_url in _ref_cache:
+        ts, urls = _ref_cache[page_url]
+        if now - ts < _CACHE_TTL and urls:
+            return urls
+
+    try:
+        client = httpx.Client(timeout=15, follow_redirects=True)
+        resp = client.get(page_url, headers={'User-Agent': 'Bot/1.0'})
+        if resp.status_code != 200:
+            logger.warning(f'Scrape {page_url}: HTTP {resp.status_code}')
+            return []
+        html = resp.text
+    except Exception as e:
+        logger.warning(f'Scrape {page_url} failed: {e}')
+        return []
+
+    # Extract <img src="...">
+    img_urls = re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    if not img_urls:
+        # Also try markdown image syntax: ![...](url)
+        img_urls = re.findall(r'!\[.*?\]\(([^)]+)\)', html)
+
+    parsed_base = urllib.parse.urlparse(page_url)
+    base_host = f'{parsed_base.scheme}://{parsed_base.host}'
+
+    resolved = []
+    for u in img_urls:
+        if u.startswith('/'):
+            u = base_host + u
+        elif u.startswith('//'):
+            u = 'https:' + u
+        elif u.startswith('data:'):
+            continue  # skip data URIs
+        elif not u.startswith('http'):
+            u = urllib.parse.urljoin(page_url, u)
+
+        # Only keep actual image URLs
+        low = u.lower().split('?')[0]  # strip query params for extension check
+        if any(low.endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp')):
+            resolved.append(u)
+            if len(resolved) >= 20:  # cap per page
+                break
+
+    logger.info(f'Scraped {len(resolved)} images from {page_url[:60]}...')
+    _ref_cache[page_url] = (now, resolved)
+    return resolved
+
+def _get_all_scraped_images() -> list[str]:
+    """Collect images from all configured folder URLs."""
+    all_images = []
+    for folder_url in _REF_FOLDERS:
+        imgs = _scrape_images_from_page(folder_url)
+        all_images.extend(imgs)
+    return all_images
+
+def _get_random_ref_url() -> str | None:
+    """Pick a random image URL from scraped folders."""
+    all_images = _get_all_scraped_images()
+    if not all_images:
+        logger.warning('No reference images scraped from any folder')
+        return None
+    return random.choice(all_images)
 
 def _get_character_desc(role_name):
     for key, desc in CHARACTER_PREFIX.items():
@@ -47,60 +126,6 @@ def _get_negative_prompt(role_id=''):
     if extra:
         return base + ', ' + extra
     return base
-
-_REF_CDN_BASE = 'https://raw.githubusercontent.com/ai-xrvip/tb/main/refs'
-
-_REF_MANIFEST = {
-    'akari': ['reference.jpg'],
-    'aya': ['reference.jpg'],
-    'chiyo': ['reference.jpg'],
-    'eri': ['reference.jpg'],
-    'fumi': ['reference.jpg'],
-    'hana': ['reference.jpg'],
-    'kaede': ['reference.jpg'],
-    'koharu': ['reference.jpg'],
-    'linxi': ['reference.jpg'],
-    'mai': ['reference.jpg'],
-    'mei': ['reference.jpg'],
-    'mia': ['reference.jpg'],
-    'mizuki': ['reference.jpg'],
-    'momo': ['reference.jpg'],
-    'nami': ['reference.jpg'],
-    'nana': ['reference.jpg'],
-    'nozomi': ['reference.jpg'],
-    'reina': ['reference.jpg'],
-    'ren': ['reference.jpg'],
-    'rio': ['reference.jpg'],
-    'ruri': ['reference.jpg'],
-    'sakura': ['reference.jpg'],
-    'shiori': ['reference.jpg'],
-    'sora': ['reference.jpg'],
-    'sunian': ['reference.jpg'],
-    'tsubaki': ['reference.jpg'],
-    'yui': ['reference.jpg'],
-    'yuki': ['reference.jpg'],
-    'yuna': ['reference.jpg'],
-    'xiaolu': ['201.jpg', '279.jpg'],
-}
-_DEFAULT_REF_FILE = 'reference.jpg'
-
-def _get_reference_urls(role_id):
-    filenames = _REF_MANIFEST.get(role_id, [_DEFAULT_REF_FILE])
-    return [f'{_REF_CDN_BASE}/{role_id}/{fn}' for fn in filenames]
-
-def _get_reference_url(role_id):
-    urls = _get_reference_urls(role_id)
-    random.shuffle(urls)
-    for url in urls:
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Bot/1.0'})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                if resp.status == 200 and 500 < len(resp.read()) < 300_000:
-                    logger.info(f'Reference CDN OK: {url}')
-                    return url
-        except Exception:
-            continue
-    return None
 
 def _build_visual_prompt(text, role_id=''):
     role_name = ''
@@ -119,17 +144,13 @@ async def generate_image(prompt, role_id=''):
     visual_prompt = _build_visual_prompt(prompt, role_id)
     negative = _get_negative_prompt(role_id)
     logger.info(f'Image gen requested for {role_id}, prompt: {prompt[:80]}...')
+
     try:
-        ref_url = _get_reference_url(role_id)
+        ref_url = _get_random_ref_url()
         if not ref_url:
-            fallback_url = FALLBACK_REF_URLS.get(role_id)
-            if fallback_url:
-                ref_url = fallback_url
-                logger.info(f'Using fallback ref for {role_id}: {ref_url[:60]}...')
-            else:
-                logger.warning(f'No reference URL for {role_id}')
-                return None
-        logger.info(f'img2img with ref: {ref_url[:80]}...')
+            logger.warning(f'No reference image available for {role_id}')
+            return None
+        logger.info(f'img2img with random ref: {ref_url[:80]}...')
         result = await _pollinations_img2img(visual_prompt, ref_url, negative)
         if result:
             logger.info(f'img2img success: {len(result)} bytes')
