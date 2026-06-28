@@ -17,7 +17,8 @@ from telegram.ext import (
 from config import config
 from deep_dream import summarize_user_conversation
 from roles import ROLES, get_role
-from database import db  # noqa: F401 — db auto-creates tables on import
+from database import db  # noqa: F401
+from db_sync import download_db, upload_db, sync_loop
 from utils.logger import logger
 from utils.rate_limit import check_rate_limit
 from handlers.commands import cmd_start, cmd_checkin, cmd_redeem, cmd_gencode
@@ -291,7 +292,7 @@ def build_single_bot(role_id: str, token: str) -> Application:
 
     # ── DB Backup: every hour ──
     app.job_queue.run_repeating(
-        lambda ctx: db.backup_database(),
+        lambda ctx: upload_db(config.DB_PATH),
         interval=3600,
         first=600,
         name="db_backup",
@@ -434,6 +435,32 @@ async def main():
     _signal.signal(_signal.SIGTERM, _handle_signal)
     _signal.signal(_signal.SIGINT, _handle_signal)
 
+    # ── DB Sync: restore from GitHub on startup ──
+
+    try:
+
+        db_path = config.DB_PATH
+
+        if not os.path.exists(db_path) or os.path.getsize(db_path) < 1024:
+
+            logger.info("DB Sync: Local DB missing/empty, downloading from GitHub...")
+
+            download_db(db_path)
+
+    except Exception as e:
+
+        logger.error(f"DB Sync startup error: {e}")
+
+
+
+    # ── DB Sync: background upload loop (every 30 min) ──
+
+    asyncio.create_task(sync_loop(config.DB_PATH, 1800))
+
+    logger.info(f"DB Sync: Auto-backup to GitHub every 30 min, path={config.DB_PATH}")
+
+
+
     # ── Healthcheck server (always start, even without bots) ──
     threading.Thread(target=run_healthcheck, daemon=True).start()
 
@@ -489,7 +516,7 @@ async def main():
         async def _webhook_backup():
             while not _shutdown_flag:
                 try:
-                    db.backup_database()
+                    upload_db(config.DB_PATH)
                 except Exception as e:
                     logger.error(f"Backup error: {e}")
                 await asyncio.sleep(3600)
