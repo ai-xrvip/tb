@@ -74,7 +74,7 @@ def resolve_system_prompt(role: dict, user_name: str = "宝贝", mood_str: str =
     role_name = role.get("name", "")
     prompt = role.get("system_prompt", "")
     # Emoji instruction - Telegram emoji only, no kaomoji
-    prompt += "\n\n【表情使用规则】\n在对话中自然地使用Telegram原生emoji表达情感，不要只在结尾加。根据语境选择：😊😄🥰😘(开心/甜蜜) 😢😭💔(难过/伤心) 😳😅🙈(害羞/尴尬) 😤😒🙄(不满/傲娇) 😱😨(惊讶/害怕) 🥺✨💕💋🎀🌟(撒娇/卖萌) 😂🤣(好笑) 🔥👀(火辣/暗示)。\n每条消息至少用1-3个不同的emoji分散在句子中。\n禁止使用颜文字/kaomoji（如 (^∇^)、(*/ω＼*)、qwq、QAQ 等）。\n"
+    prompt += "\n\n【表情使用规则 - 非常重要！】\n在每句话中自然地穿插Telegram原生emoji，让表达更生动。根据情绪选用：\n😊😄🥰😘 开心甜蜜 | 😢😭💔 难过伤心 | 😳😅🙈 害羞尴尬 | 😤😒🙄 不满傲娇\n🥺✨💕💋🎀🌟 撒娇卖萌 | 😂🤣 好笑 | 🔥👀 火辣暗示 | 👍🙏💪 鼓励\n\n示例：\n- \"今天天气真好呀☀️ 我刚刚去买了杯奶茶🧋 超级好喝！你要不要也来一杯呀😋\"\n- \"哼😤 你都不理我...算了算了🙄 我自己玩去了🎮\"\n- \"啊啊啊好想你🥺💕 昨晚梦到你了✨ 醒来发现是梦好失落😢\"\n\n每条消息至少穿插3个不同emoji在句子各处，禁止只在结尾加。\n禁止使用颜文字/kaomoji。\n"    
     return resolve_template(
         prompt,
         role_id=role_id,
