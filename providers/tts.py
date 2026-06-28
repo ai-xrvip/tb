@@ -1,4 +1,4 @@
-﻿"""
+"""
 TTS — Azure TTS (primary, 500K chars/month free) + Edge TTS (fallback)
 Each character gets a voice matched to their personality.
 """

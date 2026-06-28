@@ -451,6 +451,10 @@ async def main():
     _signal.signal(_signal.SIGTERM, _handle_signal)
     _signal.signal(_signal.SIGINT, _handle_signal)
 
+
+    # -- Healthcheck server starts FIRST (before DB sync) --
+    threading.Thread(target=run_healthcheck, daemon=True).start()
+
     # ── DB Sync: restore from GitHub on startup ──
 
     try:
@@ -477,8 +481,6 @@ async def main():
 
 
 
-    # ── Healthcheck server (always start, even without bots) ──
-    threading.Thread(target=run_healthcheck, daemon=True).start()
 
     # ── Keepalive ──
     start_keepalive()

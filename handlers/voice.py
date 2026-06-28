@@ -1,4 +1,4 @@
-﻿"""
+"""
 Speech-to-text via Cloudflare Workers AI (free, ~3000 req/day)
 Sends raw WAV bytes as u8 int array (Cloudflare Whisper speaks this format)
 """
