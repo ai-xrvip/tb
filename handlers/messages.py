@@ -272,7 +272,7 @@ def _pick_media_by_context(role_id: str, reply_text: str) -> str | None:
         if files:
             return str(random.choice(files))
     return None
-def _smart_folder_match(role_id: str, text: str) -> Optional[str]:
+def _smart_folder_match(role_id: str, text: str) -> str | None:
     """Match conversation text to best available media folder by keyword scoring."""
     media_base = Path(__file__).parent.parent / "media"
     role_dir = media_base / role_id
@@ -306,7 +306,7 @@ def _smart_folder_match(role_id: str, text: str) -> Optional[str]:
     return best_folder
 
 
-def _pick_media_by_context(role_id: str, reply_text: str) -> Optional[str]:
+def _pick_media_by_context(role_id: str, reply_text: str) -> str | None:
     """Pick a relevant image based on what the AI said."""
     import random
     folder = _smart_folder_match(role_id, reply_text)
