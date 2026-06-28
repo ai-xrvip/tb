@@ -1,5 +1,5 @@
 ﻿# Image generation via Pollinations.ai img2img
-# Reference images scraped from configurable folder/page URLs (Telegraph, ImgBB, etc.)
+# Reference images scraped from per-role folder/page URLs (Telegraph, ImgBB, etc.)
 import os, re, time, random, urllib.request, urllib.parse, httpx
 from pathlib import Path
 from config import config
@@ -32,21 +32,22 @@ ROLE_NEGATIVES = {
     'xiaolu': 'nsfw, nude, revealing, skimpy, lingerie, bikini, muscular, tall',
 }
 
-# ── Reference image scraping from folder/page URLs ──
+# ── Per-role reference image folders ──
+# Override via env: IMAGE_REF_FOLDERS_<ROLE>=url1,url2
+ROLE_REF_FOLDERS = {
+    'xiaolu': ['https://telegra.ph/miko3%E5%A4%8D%E6%B4%BB%E7%89%88-06-27'],
+}
 
-# Default: user-provided Telegraph folder. Set IMAGE_REF_FOLDERS env var to override/add.
-_DEFAULT_REF_FOLDERS = [
-    'https://telegra.ph/miko3%E5%A4%8D%E6%B4%BB%E7%89%88-06-27',
-]
-_REF_FOLDERS = os.getenv('IMAGE_REF_FOLDERS', '')
-if _REF_FOLDERS:
-    _REF_FOLDERS = [u.strip() for u in _REF_FOLDERS.split(',') if u.strip()]
-else:
-    _REF_FOLDERS = list(_DEFAULT_REF_FOLDERS)
+def _get_role_ref_folders(role_id):
+    env_key = f'IMAGE_REF_FOLDERS_{role_id.upper()}'
+    env_val = os.getenv(env_key, '')
+    if env_val:
+        return [u.strip() for u in env_val.split(',') if u.strip()]
+    return ROLE_REF_FOLDERS.get(role_id, [])
 
 # Cache: {page_url: (timestamp, [image_urls])}
 _ref_cache = {}
-_CACHE_TTL = 600  # 10 min, avoid re-scraping every request
+_CACHE_TTL = 600  # 10 min
 
 def _scrape_images_from_page(page_url: str) -> list[str]:
     """Fetch a Telegraph/page URL and extract all image URLs."""
@@ -67,14 +68,12 @@ def _scrape_images_from_page(page_url: str) -> list[str]:
         logger.warning(f'Scrape {page_url} failed: {e}')
         return []
 
-    # Extract <img src="...">
-    img_urls = re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    img_urls = re.findall(r'<img[^>]+src=["\x27]([^"\x27]+)["\x27]', html, re.IGNORECASE)
     if not img_urls:
-        # Also try markdown image syntax: ![...](url)
         img_urls = re.findall(r'!\[.*?\]\(([^)]+)\)', html)
 
     parsed_base = urllib.parse.urlparse(page_url)
-    base_host = f'{parsed_base.scheme}://{parsed_base.host}'
+    base_host = f'{parsed_base.scheme}://{parsed_base.hostname}'
 
     resolved = []
     for u in img_urls:
@@ -83,35 +82,36 @@ def _scrape_images_from_page(page_url: str) -> list[str]:
         elif u.startswith('//'):
             u = 'https:' + u
         elif u.startswith('data:'):
-            continue  # skip data URIs
+            continue
         elif not u.startswith('http'):
             u = urllib.parse.urljoin(page_url, u)
 
-        # Only keep actual image URLs
-        low = u.lower().split('?')[0]  # strip query params for extension check
+        low = u.lower().split('?')[0]
         if any(low.endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp')):
             resolved.append(u)
-            if len(resolved) >= 20:  # cap per page
+            if len(resolved) >= 20:
                 break
 
     logger.info(f'Scraped {len(resolved)} images from {page_url[:60]}...')
     _ref_cache[page_url] = (now, resolved)
     return resolved
 
-def _get_all_scraped_images() -> list[str]:
-    """Collect images from all configured folder URLs."""
+def _get_random_ref_url(role_id='') -> str | None:
+    """Pick a random image URL from the role's folder(s). Falls back to all folders."""
+    folders = _get_role_ref_folders(role_id)
     all_images = []
-    for folder_url in _REF_FOLDERS:
-        imgs = _scrape_images_from_page(folder_url)
-        all_images.extend(imgs)
-    return all_images
+    for url in folders:
+        all_images.extend(_scrape_images_from_page(url))
 
-def _get_random_ref_url() -> str | None:
-    """Pick a random image URL from scraped folders."""
-    all_images = _get_all_scraped_images()
     if not all_images:
-        logger.warning('No reference images scraped from any folder')
-        return None
+        # fallback: try all known folders
+        for urls in ROLE_REF_FOLDERS.values():
+            for url in urls:
+                all_images.extend(_scrape_images_from_page(url))
+        if not all_images:
+            logger.warning(f'No reference images for {role_id}')
+            return None
+
     return random.choice(all_images)
 
 def _get_character_desc(role_name):
@@ -146,11 +146,11 @@ async def generate_image(prompt, role_id=''):
     logger.info(f'Image gen requested for {role_id}, prompt: {prompt[:80]}...')
 
     try:
-        ref_url = _get_random_ref_url()
+        ref_url = _get_random_ref_url(role_id)
         if not ref_url:
             logger.warning(f'No reference image available for {role_id}')
             return None
-        logger.info(f'img2img with random ref: {ref_url[:80]}...')
+        logger.info(f'img2img with ref: {ref_url[:80]}...')
         result = await _pollinations_img2img(visual_prompt, ref_url, negative)
         if result:
             logger.info(f'img2img success: {len(result)} bytes')
