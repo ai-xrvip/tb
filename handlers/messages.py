@@ -210,43 +210,72 @@ def _media_allowed(role_id: str, category: str, user_id: int) -> bool:
     user_tier = db.get_unlock_tier(user_id, role_id)
     return user_tier >= required_tier
 
-def _pick_media(role_id: str, category: str, user_id: int) -> str | None:
-    """从角色 media 目录随机选一张未发过的媒体
-    支持：media_tags 中定义的标签→文件夹映射"""
-    role = get_role(role_id)
-    if not role:
+def _pick_media(role_id: str, tag: str, user_id: int) -> Optional[str]:
+    """Pick a random image from a media folder. Supports tag + keyword fallback."""
+    import random
+    media_base = Path(__file__).parent.parent / "media"
+    role_dir = media_base / role_id
+    if not role_dir.exists():
         return None
-
-    media_dir = Path(__file__).parent.parent / role.get("media_dir", "")
-    if not media_dir.exists():
+    folder = get_folder(role_id, tag)
+    if not folder:
+        folder = _smart_folder_match(role_id, tag)
+    if not folder:
         return None
-
-    # 通过 media_tags 解析标签对应的文件夹名
-    folder_name = get_folder(role_id, category)
-    if not folder_name:
+    folder_path = role_dir / folder
+    if not folder_path.exists():
         return None
-
-    category_dir = media_dir / folder_name
-    if not category_dir.exists():
+    files = [p for p in folder_path.glob("*") if p.suffix.lower() in (".jpg",".jpeg",".png",".webp")]
+    if not files:
         return None
-
-    sent = db.get_sent_media(user_id, role_id, category)
-    available = []
-    for ext in ("*.jpg", "*.jpeg", "*.png", "*.gif", "*.mp4", "*.webp"):
-        for f in category_dir.glob(ext):
-            if f.name not in sent:
-                available.append(f)
-
-    if not available:
-        available = list(category_dir.glob("*"))
-        if not available:
-            return None
-
-    chosen = random.choice(available)
-    db.mark_media_sent(user_id, role_id, category, chosen.name)
-    return str(chosen)
+    return str(random.choice(files))
 
 
+def _smart_folder_match(role_id: str, text: str) -> Optional[str]:
+    """Match conversation text to best available media folder by keyword scoring."""
+    media_base = Path(__file__).parent.parent / "media"
+    role_dir = media_base / role_id
+    text_lower = text.lower()
+    best_folder = None
+    best_score = 0
+    folder_keywords = {
+        "JK": ["jk", "??", "??", "??", "??", "???", "???"],
+        "Cos": ["cos", "cosplay", "??", "??", "??", "??"],
+        "??": ["??", "??", "??", "??", "??", "???"],
+        "??": ["??", "?", "??", "??", "??", "??", "ootd", "look"],
+        "??": ["??", "??", "??", "??", "??", "??"],
+        "??": ["??", "??", "??", "??", "?", "???"],
+        "??": ["??", "??", "??", "??", "??"],
+        "??": ["??", "??", "??", "??"],
+        "??": ["??", "?", "??"],
+        "??": ["??", "??"],
+        "??": ["??", "?"],
+        "??": ["??"],
+        "??": ["??", "??", "??", "??", "party"],
+        "??": ["??", "??", "??", "??", "??"],
+        "??": ["??", "??", "??", "??"],
+        "??": ["??", "?", "?", "??", "??", "??"],
+        "??": ["??", "??", "??", "??", "??"],
+    }
+    for folder_name, keywords in folder_keywords.items():
+        score = sum(len(kw) for kw in keywords if kw in text_lower)
+        if score > best_score and (role_dir / folder_name).is_dir():
+            best_score = score
+            best_folder = folder_name
+    return best_folder
+
+
+def _pick_media_by_context(role_id: str, reply_text: str) -> Optional[str]:
+    """Pick a relevant image based on what the AI said."""
+    import random
+    folder = _smart_folder_match(role_id, reply_text)
+    if folder:
+        media_base = Path(__file__).parent.parent / "media"
+        folder_path = media_base / role_id / folder
+        files = [p for p in folder_path.glob("*") if p.suffix.lower() in (".jpg",".jpeg",".png",".webp")]
+        if files:
+            return str(random.choice(files))
+    return None
 def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     """构建发送给 LLM 的消息列表（含世界书/记忆）"""
     role = get_role(role_id)
@@ -307,6 +336,23 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
 
     # 注入对话规则（核心：先了解用户再分享自己）
     conv_rules = _get_conversation_rules(len(db.get_chat_history(user_id)))
+
+    # ?? Inject available media tags ??
+    try:
+        from media_tags import get_tags_for_role
+        role_tags = get_tags_for_role(role_id)
+        available = []
+        import os
+        media_dir = Path(__file__).parent.parent / "media" / role_id
+        for tag, cfg in role_tags.items():
+            folder = media_dir / cfg["folder"]
+            if folder.is_dir() and any(f.suffix.lower() in (".jpg",".jpeg",".png",".webp") for f in folder.iterdir()):
+                available.append(f"{tag}({cfg["folder"]})")
+        if available:
+            media_instruction = "\n\n??????????\n????????????????????? [media:JK] ? [media:??]?\n????????" + ", ".join(available) + "\n????????????????????"
+            messages.append({"role": "system", "content": media_instruction})
+    except Exception:
+        pass
     messages.append({"role": "system", "content": conv_rules})
 
         # 加载旧的摘要
@@ -529,22 +575,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"TTS failed for {role_id}: {tts_err}")
 
 
-    media_tags_list = MEDIA_TAG_RE.findall(full_reply)
-    for tag in media_tags_list:
-        media_path = _pick_media(role_id, tag, user_id)
-        if media_path:
-            try:
-                with open(media_path, "rb") as f:
-                    if media_path.lower().endswith(".mp4"):
-                        await update.message.reply_video(f)
-                    else:
-                        await update.message.reply_photo(f)
-            except Exception as e:
-                logger.error(f"send media failed {media_path}: {e}")
+    # ?? Smart image matching (keyword-based) ??
+    media_path = _pick_media_by_context(role_id, full_reply)
+    if not media_path:
+        for tag in MEDIA_TAG_RE.findall(full_reply):
+            media_path = _pick_media(role_id, tag, user_id)
+            if media_path:
+                break
+    if media_path:
+        try:
+            with open(media_path, "rb") as f:
+                if media_path.lower().endswith(".mp4"):
+                    await update.message.reply_video(f)
+                else:
+                    await update.message.reply_photo(f)
+        except Exception as e:
+            logger.error(f"send media failed {media_path}: {e}")
 
-    history = db.get_chat_history(user_id)
-    history.append({"role": "user", "content": user_text})
-    history.append({"role": "assistant", "content": full_reply})
     db.update_chat_history(user_id, history)
 
     db.increment_message_count(user_id)
