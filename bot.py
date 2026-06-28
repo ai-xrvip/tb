@@ -283,14 +283,14 @@ def build_single_bot(role_id: str, token: str) -> Application:
     # ── Error ──
     app.add_error_handler(error_handler)
 
-    # ── Job Queue: moments ──
-    import random as _rnd
-    app.job_queue.run_repeating(
-        lambda ctx: send_moment_broadcast(ctx),
-        interval=_rnd.randint(MOMENTS_INTERVAL_MIN, MOMENTS_INTERVAL_MAX),
-        first=60,
-        name=f"moments_{role_id}",
-    )
+    # # ── Job Queue: moments ──
+    # import random as _rnd
+    # app.job_queue.run_repeating(
+    # lambda ctx: send_moment_broadcast(ctx),
+    # interval=_rnd.randint(MOMENTS_INTERVAL_MIN, MOMENTS_INTERVAL_MAX),
+    # first=60,
+    # name=f"moments_{role_id}",
+    # )
 
     return app
 
