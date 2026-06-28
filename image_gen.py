@@ -165,7 +165,7 @@ async def _pollinations_img2img(prompt, ref_url, negative=''):
         encoded = urllib.parse.quote(prompt, safe='')
         params = (
             '?image=' + urllib.parse.quote(ref_url, safe='')
-            + '&strength=0.75&nologo=true&width=1024&height=1024'
+            + '&strength=0.45&nologo=true&width=1024&height=1024'
             + '&seed=' + str(random.randint(1, 2147483647))
         )
         if negative:
