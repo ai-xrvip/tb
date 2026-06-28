@@ -39,6 +39,7 @@ from handlers.messages import (
 from handlers.group import handle_group_message
 from handlers.voice import handle_voice_message
 from handlers.admin import cmd_broadcast, cmd_stats, cmd_user_info, cmd_set_vip, cmd_yuanwei_orders
+from handlers.admin_panel import admin_main, admin_callback
 from handlers.payment import handle_paywall_callback
 from handlers.conversation import cmd_clear, cmd_export, cmd_reset, cmd_retry
 from handlers.yuanwei import get_yuanwei_conversation_handler, handle_yuanwei_callback
@@ -273,6 +274,8 @@ def build_single_bot(role_id: str, token: str) -> Application:
 
     # ── Callbacks ──
     app.add_handler(CallbackQueryHandler(handle_paywall_callback, pattern="^pay_"))
+    app.add_handler(CommandHandler("admin", admin_main))
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin:"))
     app.add_handler(CallbackQueryHandler(handle_yuanwei_callback, pattern="^yw_"))
     app.add_handler(CallbackQueryHandler(handle_keepsake_callback, pattern="^ks_"))
     app.add_handler(CallbackQueryHandler(gift_callback, pattern="^gift_"))
