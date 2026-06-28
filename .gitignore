@@ -11,3 +11,7 @@ outputs/
 logs/
 
 backups/
+
+# Reference photos (private)
+media/*/²Î¿¼Í¼/*.jpg
+media/*/²Î¿¼Í¼/*.png
