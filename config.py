@@ -30,6 +30,10 @@ def _load_bot_tokens() -> dict[str, str]:
     return tokens
 
 
+# If /data (Railway persistent volume) exists, default DB there
+_data_dir = Path("/data")
+_default_db = str(_data_dir / "bot.db") if _data_dir.exists() and os.access(str(_data_dir), os.W_OK) else str(Path(__file__).parent / "bot.db")
+
 class Config:
     # 鈹€鈹€ LLM 鎻愪緵鍟嗛€夋嫨 鈹€鈹€
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "deepseek")  # deepseek / openai
@@ -56,7 +60,7 @@ class Config:
     ]
 
     # 鈹€鈹€ 鏁版嵁搴?鈹€鈹€
-    DB_PATH: str = os.getenv("DB_PATH", str(Path(__file__).parent / "bot.db"))
+    DB_PATH: str = os.getenv("DB_PATH", _default_db)
 
     # 鈹€鈹€ 瀵硅瘽 鈹€鈹€
     MAX_HISTORY_ROUNDS: int = int(os.getenv("MAX_HISTORY_ROUNDS", "100"))

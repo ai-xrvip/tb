@@ -273,51 +273,7 @@ def _pick_media_by_context(role_id: str, reply_text: str) -> str | None:
         if files:
             return str(random.choice(files))
     return None
-def _smart_folder_match(role_id: str, text: str) -> str | None:
-    """Match conversation text to best available media folder by keyword scoring."""
-    media_base = Path(__file__).parent.parent / "media"
-    role_dir = media_base / role_id
-    text_lower = text.lower()
-    best_folder = None
-    best_score = 0
-    folder_keywords = {
-        "JK": ["jk", "??", "??", "??", "??", "???", "???"],
-        "Cos": ["cos", "cosplay", "??", "??", "??", "??"],
-        "??": ["??", "??", "??", "??", "??", "???"],
-        "??": ["??", "?", "??", "??", "??", "??", "ootd", "look"],
-        "??": ["??", "??", "??", "??", "??", "??"],
-        "??": ["??", "??", "??", "??", "?", "???"],
-        "??": ["??", "??", "??", "??", "??"],
-        "??": ["??", "??", "??", "??"],
-        "??": ["??", "?", "??"],
-        "??": ["??", "??"],
-        "??": ["??", "?"],
-        "??": ["??"],
-        "??": ["??", "??", "??", "??", "party"],
-        "??": ["??", "??", "??", "??", "??"],
-        "??": ["??", "??", "??", "??"],
-        "??": ["??", "?", "?", "??", "??", "??"],
-        "??": ["??", "??", "??", "??", "??"],
-    }
-    for folder_name, keywords in folder_keywords.items():
-        score = sum(len(kw) for kw in keywords if kw in text_lower)
-        if score > best_score and (role_dir / folder_name).is_dir():
-            best_score = score
-            best_folder = folder_name
-    return best_folder
 
-
-def _pick_media_by_context(role_id: str, reply_text: str) -> str | None:
-    """Pick a relevant image based on what the AI said."""
-    import random
-    folder = _smart_folder_match(role_id, reply_text)
-    if folder:
-        media_base = Path(__file__).parent.parent / "media"
-        folder_path = media_base / role_id / folder
-        files = [p for p in folder_path.glob("*") if p.suffix.lower() in (".jpg",".jpeg",".png",".webp")]
-        if files:
-            return str(random.choice(files))
-    return None
 def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     """构建发送给 LLM 的消息列表（含世界书/记忆）"""
     role = get_role(role_id)
@@ -501,6 +457,17 @@ async def _generate_and_send(update, reply_text, role_id, role_name):
     except Exception as e:
         logger.error(f"img2img failed: {e}")
 
+
+async def _pregenerate_photo(update, user_id, reply_text, role_id, role_name, pending_dict):
+    """Pre-generate photo in background, store for next user confirmation."""
+    try:
+        img_data = await generate_image(reply_text, role_id, role_name)
+        if img_data and len(img_data) > 500:
+            pending_dict[user_id] = img_data
+            logger.info(f"Pre-generated photo for user {user_id}, waiting for confirmation")
+    except Exception as e:
+        logger.error(f"Pre-generation failed: {e}")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理普通文本消息 —— 亲密度+时段感知延迟，角色化报错"""
     user = update.effective_user
@@ -618,39 +585,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        # Random sticker/emoji injection (15% chance)
-        if random.random() < 0.15:
+    # -- Smart photo flow: background pre-generation + conversational delivery --
+    _pending_gen = context.bot_data.setdefault("_pending_photo", {})
+    
+    # Check if user is confirming a pending photo offer
+    if user_id in _pending_gen:
+        affirm_kw = ["好", "要", "看", "发", "可以", "行", "来", "yes", "ok", "嗯", "快", "show"]
+        if any(kw in user_text for kw in affirm_kw):
+            pending = _pending_gen.pop(user_id)
             try:
-                # Cute animated emoji via send_dice
-                dice_emojis = ["??", "??", "??", "?", "??"]
-                await update.message.reply_dice(emoji=random.choice(dice_emojis))
-            except Exception:
-                pass
-    else:
-        await update.message.reply_text(MEDIA_TAG_RE.sub("", full_reply).strip() or "💬")
-
-    # ── TTS 语音消息 ──
-    if config.TTS_ENABLED:
-        try:
-            voice_data = await generate_role_voice(
-                clean_reply, role_id, role,
-                trigger_rate=config.TTS_TRIGGER_RATE,
-            )
-            if voice_data:
-                # delay disabled
-                await update.message.reply_voice(voice_data)
-        except Exception as tts_err:
-            logger.error(f"TTS failed for {role_id}: {tts_err}")
-
-
-    # ?? Smart image matching (keyword-based) ??
+                await update.message.reply_text(random.choice([
+                    "稍等哦～我找找啊... 🔍",
+                    "等一下下～翻箱倒柜中... 👗",
+                    "嘿嘿，让我找找最好看的那张... ✨",
+                ]))
+                await update.message.reply_photo(pending)
+            except Exception as e:
+                logger.error(f"Failed to send pending photo: {e}")
+        else:
+            _pending_gen.pop(user_id, None)
+    
+    # Keyword-based image matching (local media)
     media_path = _pick_media_by_context(role_id, full_reply)
-    # ?? Fire-and-forget image generation (arrives naturally after text) ??
+    if media_path:
+        try:
+            with open(media_path, "rb") as f:
+                await update.message.reply_photo(f.read())
+        except Exception:
+            pass
+    
+    # Background pre-generation: if AI reply hints at offering photos
     if clean_reply:
         role_name = role.get("name", "")
-        visual_kw = ["?", "?", "?", "?", "JK", "??", "cos", "??", "??", "??", "??", "??", "?", "??"]
-        if any(kw in clean_reply for kw in visual_kw) and random.random() < 0.3:
-            asyncio.create_task(_generate_and_send(update, clean_reply, role_id, role_name))
+        offer_kw = ["要看吗", "想看吗", "给你看", "发你看", "给你拍", "照片", "自拍", "写真"]
+        if any(kw in clean_reply for kw in offer_kw):
+            asyncio.create_task(_pregenerate_photo(update, user_id, clean_reply, role_id, role_name, _pending_gen))
 
     db.update_chat_history(user_id, history)
 
@@ -707,15 +676,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error: {context.error}", exc_info=True)
     if update and isinstance(update, Update) and update.effective_message:
         try:
-            role_id = "xiaolu"
-            try:
-                if hasattr(context, 'bot_data'):
-                    role_id = context.bot_data.get("role_id", "xiaolu")
-            except Exception as e:
-                logger.debug(f"Non-critical error in message handler: {e}")
-            await update.effective_message.reply_text(_get_role_busy_message(role_id))
-        except Exception as e:
-            logger.debug(f"Non-critical: {e}")
+            await update.effective_message.reply_text("❌ 出了点小问题，请稍后再试哦~")
+        except Exception:
+            pass
 
 
 # ── 管理员上传对话 ──
