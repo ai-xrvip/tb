@@ -627,7 +627,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # -- Post-reply cleanup (wrapped to prevent error propagation) --
     try:
-        db.update_chat_history(user_id, history)
+        messages.append({"role": "assistant", "content": full_reply})
+        db.update_chat_history(user_id, messages)
         db.increment_message_count(user_id)
         new_total = (user_data.get("total_messages", 0) or 0) + 1
         next_paywall = get_current_paywall(role_id, new_total, unlock_tier)
