@@ -12,6 +12,7 @@ import httpx
 from utils.logger import logger
 
 POLLINATIONS_URL = "https://image.pollinations.ai/prompt"
+REF_CACHE: dict[str, bytes] = {}  # role_id -> base64 bytes
 GEN_TIMEOUT = 30  # seconds
 
 
@@ -63,25 +64,26 @@ def _extract_visual_prompt(reply_text: str, role_name: str = "") -> str:
 
 
 async def generate_image(reply_text: str, role_id: str, role_name: str = "") -> bytes | None:
-    """
-    Generate an image using Pollinations.ai img2img.
-    1. Pick reference photo for this character
-    2. Extract visual prompt from AI's reply
-    3. Call Pollinations with reference + prompt
-    """
-    ref_path = await _pick_reference_photo(role_id)
-    if not ref_path:
-        logger.warning(f"No reference photo for {role_id}, skipping img2img")
-        return None
-
-    # Read and encode reference photo
-    try:
-        with open(ref_path, "rb") as f:
-            ref_bytes = f.read()
-        ref_b64 = base64.b64encode(ref_bytes).decode("ascii")
-    except Exception as e:
-        logger.error(f"Failed to read reference photo {ref_path}: {e}")
-        return None
+    """Generate image using Pollinations.ai img2img (cached reference)."""
+    # Use cached reference photo
+    if role_id not in REF_CACHE:
+        ref_path = await _pick_reference_photo(role_id)
+        if not ref_path:
+            logger.warning(f"No reference photo for {role_id}")
+            return None
+        try:
+            with open(ref_path, "rb") as f:
+                ref_bytes = f.read()
+            # Limit reference to ~300KB for faster transfer
+            if len(ref_bytes) > 300_000:
+                logger.info(f"Reference photo too large ({len(ref_bytes)}B), skipping")
+                return None
+            REF_CACHE[role_id] = ref_bytes
+        except Exception as e:
+            logger.error(f"Failed to read reference: {e}")
+            return None
+    
+    ref_b64 = base64.b64encode(REF_CACHE[role_id]).decode("ascii")
 
     # Build prompt
     prompt = _extract_visual_prompt(reply_text, role_name)

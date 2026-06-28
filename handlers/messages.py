@@ -492,6 +492,15 @@ async def _get_provider_for_role(role_id: str):
         raise ValueError(f"Unsupported provider: {provider_type_str}")
 
 
+
+async def _generate_and_send(update, reply_text, role_id, role_name):
+    try:
+        img_data = await generate_image(reply_text, role_id, role_name)
+        if img_data:
+            await update.message.reply_photo(img_data)
+    except Exception as e:
+        logger.error(f"img2img failed: {e}")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理普通文本消息 —— 亲密度+时段感知延迟，角色化报错"""
     user = update.effective_user
@@ -636,18 +645,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ?? Smart image matching (keyword-based) ??
     media_path = _pick_media_by_context(role_id, full_reply)
-    # ?? Image generation (img2img via Pollinations.ai) ??
+    # ?? Fire-and-forget image generation (arrives naturally after text) ??
     if clean_reply:
         role_name = role.get("name", "")
-        try:
-            # Only generate for visual topics (keywords present)
-            visual_kw = ["?", "?", "?", "?", "JK", "??", "cos", "??", "??", "??", "??", "??", "?", "??"]
-            if any(kw in clean_reply for kw in visual_kw) and random.random() < 0.3:
-                img_data = await generate_image(clean_reply, role_id, role_name)
-                if img_data:
-                    await update.message.reply_photo(img_data)
-        except Exception as e:
-            logger.error(f"img2img failed: {e}")
+        visual_kw = ["?", "?", "?", "?", "JK", "??", "cos", "??", "??", "??", "??", "??", "?", "??"]
+        if any(kw in clean_reply for kw in visual_kw) and random.random() < 0.3:
+            asyncio.create_task(_generate_and_send(update, clean_reply, role_id, role_name))
 
     db.update_chat_history(user_id, history)
 
