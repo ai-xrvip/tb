@@ -250,35 +250,19 @@ class Database:
         self.conn.commit()
 
     def is_vip(self, user_id: int) -> bool:
-        user = self.get_user(user_id)
-        if not user or not user.get("vip_expire"):
-            return False
-        try:
-            expire = datetime.fromisoformat(user["vip_expire"])
-            return expire > datetime.now(timezone.utc)
-        except (ValueError, TypeError):
-            return False
-
-    def set_vip(self, user_id: int, days: int) -> datetime:
-        now = datetime.now(timezone.utc)
-        user = self.get_user(user_id)
-        if user and user.get("vip_expire"):
-            try:
-                current = datetime.fromisoformat(user["vip_expire"])
-            except (ValueError, TypeError):
-                current = now
-            if current < now:
-                current = now
-            new_expire = current + timedelta(days=days)
-        else:
-            new_expire = now + timedelta(days=days)
+        """VIP is permanent - check vip_tier in user_profiles."""
+        row = self.conn.execute(
+            "SELECT vip_tier FROM user_profiles WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row is not None and (row["vip_tier"] or 0) > 0
+    def set_vip(self, user_id: int, days: int = 0):
+        """Set user as VIP permanently. days param kept for compatibility."""
         self.conn.execute(
-            "UPDATE users SET vip_expire = ? WHERE user_id = ?",
-            (new_expire.isoformat(), user_id),
+            "INSERT INTO user_profiles (user_id, vip_tier) VALUES (?, 1) "
+            "ON CONFLICT(user_id) DO UPDATE SET vip_tier = 1",
+            (user_id,),
         )
         self.conn.commit()
-        return new_expire
-
     def deduct_free_count(self, user_id: int) -> bool:
         cn = self.conn
         cn.execute("BEGIN")
