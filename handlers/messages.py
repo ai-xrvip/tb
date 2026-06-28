@@ -578,17 +578,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as tts_err:
             logger.error(f"TTS failed for {role_id}: {tts_err}")
 
-    # -- Image generation: ONLY when user explicitly asks for photos --
+    # -- Image generation: ONLY when user explicitly asks for photos, with tier check --
     photo_request_keywords = ["发张照片", "看看你", "照片呢", "发照片", "照片看看", "看看照片", "有没有照片", "发图", "看图", "图片", "你的照片", "给我看看你", "想看看你", "自拍", "写真"]
     user_requests_photo = any(kw in user_text for kw in photo_request_keywords)
 
     if config.IMAGE_GEN_ENABLED and user_requests_photo and clean_reply and generate_image:
-        try:
-            img_data = await generate_image(clean_reply, role_id)
-            if img_data and len(img_data) > 500:
-                await update.message.reply_photo(img_data)
-        except Exception as e:
-            logger.error(f"Image gen error: {e}")
+        required_tier = get_max_tier_for_text(role_id, clean_reply)
+        if unlock_tier >= required_tier:
+            try:
+                img_data = await generate_image(clean_reply, role_id)
+                if img_data and len(img_data) > 500:
+                    await update.message.reply_photo(img_data)
+            except Exception as e:
+                logger.error(f"Image gen error: {e}")
+        else:
+            # Locked tier: tell user what they need to unlock
+            role_name = role.get("name", "我") if role else "我"
+            tier_names = {0: "免费", 1: "等级1", 2: "等级2", 3: "等级3"}
+            tn = tier_names.get(required_tier, f"等级{required_tier}")
+            await update.message.reply_text(
+                f"哎呀～这张照片需要解锁{tn}才能看哦！"
+                f"继续和{role_name}聊天升级吧 💕"
+            )
 
     if clean_reply:
         if not voice_sent:
