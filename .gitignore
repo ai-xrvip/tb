@@ -12,6 +12,6 @@ logs/
 
 backups/
 
-# Reference photos (private)
-media/*/²Î¿¼Í¼/*.jpg
-media/*/²Î¿¼Í¼/*.png
+
+# Reference photos (kept in refs/ for CDN, ignore local media copies)
+media/*/²Î¿¼Í¼/

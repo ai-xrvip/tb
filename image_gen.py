@@ -5,6 +5,7 @@ Supports img2img with reference photos from media/<role_id>/参考图/.
 import os
 import base64
 import random
+import urllib.request
 import urllib.parse
 import httpx
 from pathlib import Path
@@ -33,28 +34,54 @@ def _get_character_desc(role_name: str) -> str:
             return desc
     return DEFAULT_CHARACTER
 
+# CDN base URL for reference photos (GitHub raw)
+_REF_CDN_BASE = "https://raw.githubusercontent.com/ai-xrvip/tb/main/refs"
+
+# Per-role reference photo manifest
+_REF_MANIFEST: dict[str, list[str]] = {
+    "xiaolu": ["201.jpg", "279.jpg"],
+}
+_DEFAULT_REF_FILE = "reference.jpg"
+
+
+def _get_reference_urls(role_id: str) -> list[str]:
+    """Get CDN URLs for a role reference photos."""
+    filenames = _REF_MANIFEST.get(role_id, [_DEFAULT_REF_FILE])
+    return [f"{_REF_CDN_BASE}/{role_id}/{fn}" for fn in filenames]
+
 
 def _get_reference_b64(role_id: str) -> str | None:
-    """Get base64-encoded reference photo for img2img."""
+    """Get base64-encoded reference photo (CDN first, local fallback)."""
+    # Try CDN first
+    urls = _get_reference_urls(role_id)
+    random.shuffle(urls)
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Bot/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = resp.read()
+            if resp.status == 200 and len(data) > 500 and len(data) < 300_000:
+                logger.info(f"Reference from CDN: {url}")
+                return base64.b64encode(data).decode("ascii")
+        except Exception:
+            continue
+
+    # Fallback: local media/<role>/???/
     media_base = Path(__file__).parent / "media" / role_id
-    ref_dir = media_base / "参考图"
-    if not ref_dir.is_dir():
-        return None
+    ref_dir = media_base / "???"
+    if ref_dir.is_dir():
+        refs = [p for p in ref_dir.glob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")]
+        if refs:
+            ref_path = random.choice(refs)
+            try:
+                with open(ref_path, "rb") as f:
+                    data = f.read()
+                if len(data) <= 300_000:
+                    return base64.b64encode(data).decode("ascii")
+            except Exception as e:
+                logger.error("Failed to read local ref: " + str(e))
 
-    refs = [p for p in ref_dir.glob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")]
-    if not refs:
-        return None
-
-    ref_path = random.choice(refs)
-    try:
-        with open(ref_path, "rb") as f:
-            data = f.read()
-        if len(data) > 300_000:  # Too large, skip
-            return None
-        return base64.b64encode(data).decode("ascii")
-    except Exception as e:
-        logger.error("Failed to read reference: " + str(e))
-        return None
+    return None
 
 
 def _build_visual_prompt(text: str, role_id: str = "") -> str:

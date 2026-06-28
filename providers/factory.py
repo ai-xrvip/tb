@@ -2,6 +2,7 @@
 from enum import Enum
 from typing import Optional, Type
 from .base import BaseProvider
+from config import config
 
 
 class ProviderType(str, Enum):
