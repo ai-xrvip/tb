@@ -560,13 +560,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # delay disabled per user request
     # await asyncio.sleep(delay)
 
-    # ?? TTS voice (check first, skip text if voice sent) ??
+    # -- TTS voice: random probability OR user explicitly requests voice --
+    voice_request_keywords = ["说句话", "发语音", "听听你的声音", "你的声音", "说话听听", "说句话听听", "语音", "声音好听", "想听你说话"]
+    user_requests_voice = any(kw in user_text for kw in voice_request_keywords)
+    voice_trigger_rate = 1.0 if user_requests_voice else config.TTS_TRIGGER_RATE
+
     voice_sent = False
     if config.TTS_ENABLED and clean_reply and generate_role_voice:
         try:
             voice_data = await generate_role_voice(
                 clean_reply, role_id, role,
-                trigger_rate=config.TTS_TRIGGER_RATE,
+                trigger_rate=voice_trigger_rate,
             )
             if voice_data:
                 await update.message.reply_voice(voice_data)
@@ -574,21 +578,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as tts_err:
             logger.error(f"TTS failed for {role_id}: {tts_err}")
 
-    # -- Image generation: check tier, API first, then text --
-    if config.IMAGE_GEN_ENABLED and clean_reply and generate_image:
-        required_tier = get_max_tier_for_text(role_id, clean_reply)
-        if unlock_tier >= required_tier:
-            # Only generate if AI is explicitly offering/showing photos
-            visual_intent = ["要看吗", "想看吗", "给你看", "发你看",
-                           "给你拍", "照片", "自拍", "写真", "拍一张",
-                           "穿了", "换了", "超好看"]
-            if any(kw in clean_reply for kw in visual_intent):
-                try:
-                    img_data = await generate_image(clean_reply, role_id)
-                    if img_data and len(img_data) > 500:
-                        await update.message.reply_photo(img_data)
-                except Exception as e:
-                    logger.error(f"Image gen error: {e}")
+    # -- Image generation: ONLY when user explicitly asks for photos --
+    photo_request_keywords = ["发张照片", "看看你", "照片呢", "发照片", "照片看看", "看看照片", "有没有照片", "发图", "看图", "图片", "你的照片", "给我看看你", "想看看你", "自拍", "写真"]
+    user_requests_photo = any(kw in user_text for kw in photo_request_keywords)
+
+    if config.IMAGE_GEN_ENABLED and user_requests_photo and clean_reply and generate_image:
+        try:
+            img_data = await generate_image(clean_reply, role_id)
+            if img_data and len(img_data) > 500:
+                await update.message.reply_photo(img_data)
+        except Exception as e:
+            logger.error(f"Image gen error: {e}")
 
     if clean_reply:
         if not voice_sent:
