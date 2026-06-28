@@ -113,7 +113,20 @@ async def generate_image(prompt: str, role_id: str = "") -> bytes | None:
     visual_prompt = _build_visual_prompt(prompt, role_id)
     logger.info(f"Image gen requested for {role_id}, prompt: {prompt[:80]}...")
 
-    # Try Pollinations txt2img (most reliable, no CDN needed)
+    # Try img2img with reference first (better face consistency)
+    try:
+        ref_b64 = _get_reference_b64(role_id)
+        if ref_b64:
+            logger.info(f"img2img with reference ({len(ref_b64)} chars)")
+            result = await _pollinations_img2img(visual_prompt, ref_b64)
+            if result:
+                logger.info(f"img2img success: {len(result)} bytes")
+                return result
+            logger.warning("img2img failed, falling back to txt2img")
+    except Exception as e:
+        logger.error(f"img2img exception: {e}")
+
+    # Fallback: txt2img (no reference needed)
     try:
         result = await _pollinations_txt2img(visual_prompt)
         if result:
@@ -121,18 +134,6 @@ async def generate_image(prompt: str, role_id: str = "") -> bytes | None:
             return result
     except Exception as e:
         logger.error(f"txt2img exception: {e}")
-
-    # Try img2img with reference if txt2img failed
-    try:
-        ref_b64 = _get_reference_b64(role_id)
-        if ref_b64:
-            logger.info(f"Trying img2img with reference ({len(ref_b64)} chars)")
-            result = await _pollinations_img2img(visual_prompt, ref_b64)
-            if result:
-                logger.info(f"img2img success: {len(result)} bytes")
-                return result
-    except Exception as e:
-        logger.error(f"img2img exception: {e}")
 
     logger.warning(f"All image gen methods failed for {role_id}")
     return None
