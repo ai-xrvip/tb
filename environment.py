@@ -2,7 +2,7 @@
 天气/心情感知模块 —— 获取当前天气和时间信息，注入到 AI prompt
 使用 cities.py 提供的共享天气缓存 + localization.py 提供的时区和地域化描述
 """
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from cities import ROLE_CITIES, get_weather_str
 from localization import get_locale, get_local_time
@@ -28,7 +28,7 @@ def _get_weather_detail(city: str) -> Optional[dict]:
 
 def get_time_of_day() -> str:
     """获取北京时间时段（兼容旧接口）"""
-    h = datetime.now().hour
+    h = (datetime.now(timezone.utc) + timedelta(hours=8)).hour
     if 5 <= h < 9: return "清晨/早晨"
     elif 9 <= h < 12: return "上午"
     elif 12 <= h < 14: return "中午"
