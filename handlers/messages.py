@@ -595,13 +595,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_photo(img_data)
             except Exception as e:
                 logger.error(f"Image gen error: {e}")
-    if config.IMAGE_GEN_ENABLED and clean_reply:
-        try:
-            img_data = await generate_image(clean_reply, role.get("name", ""))
-            if img_data and len(img_data) > 500:
-                await update.message.reply_photo(img_data)
-        except Exception as e:
-            logger.error(f"Image gen error: {e}")
 
     if clean_reply:
         if not voice_sent:
