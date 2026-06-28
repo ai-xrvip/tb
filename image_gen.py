@@ -1,14 +1,5 @@
-'''
-Image generation via Pollinations.ai (free, unlimited, no censorship).
-Supports img2img with reference photos from refs/<role_id>/.
-FORCE IMG2IMG ONLY - no txt2img fallback.
-'''
-import os
-import base64
-import random
-import urllib.request
-import urllib.parse
-import httpx
+# Image generation via Pollinations.ai img2img using CDN reference URLs
+import os, random, urllib.request, urllib.parse, httpx
 from pathlib import Path
 from config import config
 from utils.logger import logger
@@ -16,30 +7,23 @@ from utils.logger import logger
 POLLINATIONS_URL = 'https://image.pollinations.ai/prompt'
 GEN_TIMEOUT = 45
 
-
-# Fixed character visual descriptions (NOT role names - these describe appearance)
 CHARACTER_PREFIX = {
     'xiaolu': 'cute young Asian woman, sweet smile, cosplayer, JK uniform, twin tails, soft makeup, fair skin',
     'linxi': 'elegant Asian woman, OL outfit, high heels, sharp eyes, mature beauty, black hair, red lips',
     'mia': 'innocent Asian woman, sundress, long wavy hair, doe eyes, natural makeup, soft lighting',
     'sunian': 'gentle Asian woman, traditional hanfu, classical beauty, long black hair, elegant posture',
 }
-
 DEFAULT_CHARACTER = 'beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup'
 
-
-def _get_character_desc(role_name: str) -> str:
-    '''Get the visual character description, NOT the role name.'''
+def _get_character_desc(role_name):
     for key, desc in CHARACTER_PREFIX.items():
         if key in role_name.lower() or role_name in key:
             return desc
     return DEFAULT_CHARACTER
 
-# CDN base URL for reference photos (GitHub raw)
 _REF_CDN_BASE = 'https://raw.githubusercontent.com/ai-xrvip/tb/main/refs'
 
-# Per-role reference photo manifest (ALL 30 roles)
-_REF_MANIFEST: dict[str, list[str]] = {
+_REF_MANIFEST = {
     'akari': ['reference.jpg'],
     'aya': ['reference.jpg'],
     'chiyo': ['reference.jpg'],
@@ -66,59 +50,32 @@ _REF_MANIFEST: dict[str, list[str]] = {
     'sora': ['reference.jpg'],
     'sunian': ['reference.jpg'],
     'tsubaki': ['reference.jpg'],
-    'xiaolu': ['201.jpg', '279.jpg'],
     'yui': ['reference.jpg'],
     'yuki': ['reference.jpg'],
     'yuna': ['reference.jpg'],
+    'xiaolu': ['201.jpg', '279.jpg'],
 }
 _DEFAULT_REF_FILE = 'reference.jpg'
 
-
-def _get_reference_urls(role_id: str) -> list[str]:
-    '''Get CDN URLs for a role reference photos.'''
+def _get_reference_urls(role_id):
     filenames = _REF_MANIFEST.get(role_id, [_DEFAULT_REF_FILE])
     return [f'{_REF_CDN_BASE}/{role_id}/{fn}' for fn in filenames]
 
-
-def _get_reference_b64(role_id: str) -> str | None:
-    '''Get base64-encoded reference photo (CDN first, local fallback).'''
-    # Try CDN first
+def _get_reference_url(role_id):
     urls = _get_reference_urls(role_id)
     random.shuffle(urls)
-    logger.info(f'Trying {len(urls)} reference URLs for role {role_id}')
     for url in urls:
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'Bot/1.0'})
             with urllib.request.urlopen(req, timeout=10) as resp:
-                data = resp.read()
-            if resp.status == 200 and len(data) > 500 and len(data) < 300_000:
-                logger.info(f'Reference loaded from CDN: {url} ({len(data)} bytes)')
-                return base64.b64encode(data).decode('ascii')
-            else:
-                logger.warning(f'CDN ref {url}: status={resp.status} size={len(data)}')
+                if resp.status == 200 and 500 < len(resp.read()) < 300_000:
+                    logger.info(f'Reference CDN OK: {url}')
+                    return url
         except Exception:
             continue
-
-    # Fallback: local refs/<role_id>/
-    local_base = Path(__file__).parent / 'refs' / role_id
-    if local_base.is_dir():
-        refs = [p for p in local_base.glob('*') if p.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp')]
-        if refs:
-            ref_path = random.choice(refs)
-            try:
-                with open(ref_path, 'rb') as f:
-                    data = f.read()
-                if 500 < len(data) <= 300_000:
-                    logger.info(f'Reference loaded from local: {ref_path} ({len(data)} bytes)')
-                    return base64.b64encode(data).decode('ascii')
-            except Exception as e:
-                logger.error('Failed to read local ref: ' + str(e))
-
     return None
 
-
-def _build_visual_prompt(text: str, role_id: str = '') -> str:
-    '''Build visual prompt with fixed character description + scene from AI reply.'''
+def _build_visual_prompt(text, role_id=''):
     role_name = ''
     if role_id:
         from roles import ROLES
@@ -126,50 +83,34 @@ def _build_visual_prompt(text: str, role_id: str = '') -> str:
         role_name = role.get('name', '')
     char_desc = _get_character_desc(role_name)
     text = text.strip()[:300]
-    quality = (
-        'high quality, photorealistic, soft natural lighting, '
-        'detailed skin texture, cinematic composition, 8k, masterpiece'
-    )
+    quality = 'high quality, photorealistic, soft natural lighting, detailed skin texture, cinematic composition, 8k, masterpiece'
     return char_desc + ', ' + quality + ' -- scene: ' + text
 
-
-async def generate_image(prompt: str, role_id: str = '') -> bytes | None:
-    '''Generate image using Pollinations.ai img2img ONLY (no txt2img fallback).'''
+async def generate_image(prompt, role_id=''):
     if not config.IMAGE_GEN_ENABLED:
-        logger.debug('Image gen disabled by config')
         return None
-
     visual_prompt = _build_visual_prompt(prompt, role_id)
     logger.info(f'Image gen requested for {role_id}, prompt: {prompt[:80]}...')
-
-    # img2img ONLY - must have reference photo
     try:
-        ref_b64 = _get_reference_b64(role_id)
-        if not ref_b64:
-            logger.warning(f'No reference photo available for {role_id}, img2img skipped')
+        ref_url = _get_reference_url(role_id)
+        if not ref_url:
+            logger.warning(f'No reference URL for {role_id}')
             return None
-        logger.info(f'img2img with reference ({len(ref_b64)} chars)')
-        result = await _pollinations_img2img(visual_prompt, ref_b64)
+        logger.info(f'img2img with ref: {ref_url[:80]}...')
+        result = await _pollinations_img2img(visual_prompt, ref_url)
         if result:
             logger.info(f'img2img success: {len(result)} bytes')
             return result
         logger.warning(f'img2img returned no result for {role_id}')
     except Exception as e:
         logger.error(f'img2img exception: {e}')
-
     return None
 
-
-async def _pollinations_img2img(prompt: str, ref_b64: str) -> bytes | None:
-    '''Generate via Pollinations.ai with reference image.'''
+async def _pollinations_img2img(prompt, ref_url):
     try:
         encoded = urllib.parse.quote(prompt, safe='')
-        ref_uri = 'data:image/jpeg;base64,' + ref_b64
-        url = (
-            POLLINATIONS_URL + '/' + encoded
-            + '?image=' + urllib.parse.quote(ref_uri, safe='')
-            + '&strength=0.75&nologo=true&width=1024&height=1024'
-        )
+        url = POLLINATIONS_URL + '/' + encoded + '?image=' + urllib.parse.quote(ref_url, safe='') + '&strength=0.75&nologo=true&width=1024&height=1024'
+        logger.info(f'img2img URL: {len(url)} chars')
         async with httpx.AsyncClient(timeout=GEN_TIMEOUT, follow_redirects=True) as client:
             resp = await client.get(url)
             if resp.status_code == 200 and len(resp.content) > 500:
@@ -182,7 +123,6 @@ async def _pollinations_img2img(prompt: str, ref_b64: str) -> bytes | None:
     except Exception as e:
         logger.error('Pollinations img2img error: ' + str(e))
     return None
-
 
 def _extract_visual_prompt(reply_text, role_name=''):
     return _build_visual_prompt(reply_text, role_name)
