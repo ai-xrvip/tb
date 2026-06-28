@@ -648,7 +648,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if kw in user_text and kw not in interests:
                     interests = (interests + " " + user_text[:100]).strip()[:500]
                     break
-            db.upsert_profile(user_id, display_name=name, interests=interests, total_messages=new_total)
+            # 提取重要信息（每10条消息用AI提取一次）
+            facts = prof.get("facts", [])
+            if new_total % 10 == 0 and full_reply:
+                try:
+                    fact_prompt = f"从用户这句话提取1条重要个人信息（职业/年龄/城市/关系等），只返回5字以内的关键词，没有就返回空：{user_text}"
+                    provider = await _get_provider_for_role(role_id)
+                    fact = (await provider.chat(messages=[{"role":"user","content":fact_prompt}], max_tokens=20, temperature=0.3)).strip()
+                    if fact and len(fact) <= 15 and fact not in facts:
+                        facts.append(fact)
+                        if len(facts) > 10:
+                            facts = facts[-10:]
+                except Exception:
+                    pass
+            db.upsert_profile(user_id, display_name=name, interests=interests, facts=facts, total_messages=new_total)
             db.update_profile_tier(user_id, unlock_tier)
         except Exception:
             pass
