@@ -2,6 +2,7 @@
 TTS — Azure TTS (primary, 500K chars/month free) + Edge TTS (fallback)
 Each character gets a voice matched to their personality.
 """
+import os
 import io
 import asyncio
 import random
@@ -13,15 +14,15 @@ from utils.logger import logger
 
 # ── Voice map per character type ──
 VOICE_MAP = {
-    "cute": "zh-CN-XiaoxiaoNeural",      # 活泼可爱
-    "mature": "zh-CN-XiaohanNeural",      # 温柔御姐
-    "tsundere": "zh-CN-YunxiNeural",      # 傲娇元气
-    "gentle": "zh-CN-XiaoyiNeural",       # 温柔邻家
-    "sexy": "zh-CN-XiaomoNeural",         # 性感磁性
-    "default": "zh-CN-XiaochenNeural",    # 元气少女
+    "cute": "zh-CN-XiaoxiaoNeural",      # ????
+    "mature": "zh-CN-XiaohanNeural",      # ????
+    "tsundere": "zh-CN-YunxiNeural",      # ????
+    "gentle": "zh-CN-XiaoyiNeural",       # ????
+    "sexy": "zh-CN-XiaomoNeural",         # ????
+    "default": "zh-CN-XiaochenNeural",    # ????
 }
 
-TTS_TRIGGER_RATE = 0.15
+TTS_TRIGGER_RATE = float(os.getenv("TTS_TRIGGER_RATE", "0.15"))
 ROLE_VOICE_MAP: dict[str, str] = {}
 
 

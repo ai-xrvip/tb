@@ -2,6 +2,7 @@
 Image generation via Pollinations.ai (free, unlimited, no censorship).
 Supports img2img with reference photos from media/<role_id>/参考图/.
 """
+import os
 import base64
 import random
 import urllib.parse
@@ -12,6 +13,27 @@ from utils.logger import logger
 
 POLLINATIONS_URL = "https://image.pollinations.ai/prompt"
 GEN_TIMEOUT = 45
+
+# Rate limiting: per-user cooldown (seconds)
+_image_cooldown: dict[int, float] = {}
+IMAGE_COOLDOWN_SEC = int(os.getenv("IMAGE_COOLDOWN_SEC", "30"))
+
+def _check_image_rate(user_id: int) -> bool:
+    """Returns True if user can generate image (cooldown passed)."""
+    import time
+    now = time.time()
+    last = _image_cooldown.get(user_id, 0)
+    if now - last < IMAGE_COOLDOWN_SEC:
+        return False
+    _image_cooldown[user_id] = now
+    # Cleanup old entries periodically
+    if len(_image_cooldown) > 1000:
+        cutoff = now - IMAGE_COOLDOWN_SEC * 2
+        for uid in list(_image_cooldown.keys()):
+            if _image_cooldown[uid] < cutoff:
+                del _image_cooldown[uid]
+    return True
+
 
 # Fixed character visual descriptions (NOT role names - these describe appearance)
 CHARACTER_PREFIX = {
@@ -66,9 +88,12 @@ def _build_visual_prompt(text: str, role_name: str = "") -> str:
     return char_desc + ", " + quality + " -- scene: " + text
 
 
-async def generate_image(prompt: str, role_name: str = "") -> bytes | None:
+async def generate_image(prompt: str, role_name: str = "", user_id: int = 0) -> bytes | None:
     """Generate image from text using Pollinations.ai img2img."""
     if not config.IMAGE_GEN_ENABLED:
+        return None
+    if user_id and not _check_image_rate(user_id):
+        logger.debug(f"Image rate limited for user {user_id}")
         return None
 
     visual_prompt = _build_visual_prompt(prompt, role_name)

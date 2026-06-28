@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from utils.logger import logger
-import config
+from config import config
 
 _local = threading.local()
 
@@ -33,8 +33,8 @@ def _get_conn(db_path: str) -> sqlite3.Connection:
 
 
 class Database:
-    def __init__(self, db_path: str = "bot.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or config.DB_PATH
         self._init_tables()
 
     @property
@@ -624,15 +624,17 @@ class Database:
         import json
         now = datetime.now(timezone.utc).isoformat()
         facts_json = json.dumps(facts or [], ensure_ascii=False)
+        # Only overwrite name/interests if new values are non-empty
         self.conn.execute(
             "INSERT INTO user_profiles (user_id, display_name, interests, facts, total_messages, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET "
-            "display_name = COALESCE(NULLIF(?, ''), display_name), "
+            "display_name = CASE WHEN ? != '' THEN ? ELSE display_name END, "
             "interests = CASE WHEN ? != '' THEN ? ELSE interests END, "
             "facts = ?, total_messages = ?, updated_at = ?",
             (user_id, display_name, interests, facts_json, total_messages, now,
-             display_name, interests, interests, facts_json, total_messages, now),
+             display_name, display_name, interests, interests,
+             facts_json, total_messages, now),
         )
         self.conn.commit()
 

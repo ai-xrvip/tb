@@ -13,15 +13,15 @@ from roles import ROLES
 from utils.logger import logger
 
 
-# 主动消息触发条件：用户距离上次聊天超过 N 小时
+    # [comment]
 INACTIVE_HOURS = 6
-# 每次检查最多发 N 个用户
+    # [comment]
 MAX_SEND_PER_ROUND = 5
-# 检查间隔（秒）
+    # [comment]
 CHECK_INTERVAL = 1800  # 30分钟
 
 
-# 各角色主动消息话术池
+    # [comment]
 PROACTIVE_MESSAGES = {
     "xiaolu": [
         "哥哥…你今天还没理我呢🥺 是不是不喜欢小鹿了呀～",
@@ -39,7 +39,7 @@ PROACTIVE_MESSAGES = {
     ],
 }
 
-# 默认话术（角色没有专属话术时用）
+    # [comment]
 DEFAULT_MESSAGES = [
     "在干嘛呢～突然想你了",
     "今天怎么不理我呀…是不是我哪里惹你生气了？",
@@ -59,7 +59,7 @@ async def send_proactive_message(bot: Bot, user_id: int, role_id: str):
     role_name = role.get("name", role_id)
     messages = _get_proactive_messages(role_id)
 
-    # 检查用户是否还有效（没被封禁、还在跟这个角色聊）
+    # [comment]
     if db.is_blocked(user_id):
         return
 
@@ -67,7 +67,7 @@ async def send_proactive_message(bot: Bot, user_id: int, role_id: str):
     try:
         await bot.send_message(chat_id=user_id, text=text)
         logger.info(f"Proactive msg sent to user={user_id} role={role_id}")
-        # 记录主动消息发送时间
+    # [comment]
         db.set_last_proactive(user_id, role_id)
     except Exception as e:
         logger.warning(f"Proactive msg failed user={user_id}: {e}")
@@ -75,7 +75,7 @@ async def send_proactive_message(bot: Bot, user_id: int, role_id: str):
 
 async def check_and_send_proactive(bot: Bot, role_id: str):
     """检查所有用户，给符合条件的发送主动消息"""
-    # 获取所有跟这个角色聊过的活跃用户
+    # [comment]
     users = db.get_active_users_for_role(role_id)
     random.shuffle(users)
     sent = 0
@@ -84,16 +84,16 @@ async def check_and_send_proactive(bot: Bot, role_id: str):
         if db.is_blocked(user_id):
             continue
 
-        # 检查上次主动消息时间
+    # [comment]
         last_proactive = db.get_last_proactive(user_id, role_id)
         last_message = db.get_last_message_time(user_id)
 
         now = time.time()
-        # 如果用户最近6小时内发过消息，不发主动
+    # [comment]
         if last_message and (now - last_message) < INACTIVE_HOURS * 3600:
             continue
 
-        # 如果上次主动消息在12小时内，不发重复
+    # [comment]
         if last_proactive and (now - last_proactive) < 12 * 3600:
             continue
 

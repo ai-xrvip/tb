@@ -598,7 +598,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            "穿了", "换了", "超好看"]
             if any(kw in clean_reply for kw in visual_intent):
                 try:
-                    img_data = await generate_image(clean_reply, role.get("name", ""))
+                    img_data = await generate_image(clean_reply, role.get("name", ""), user_id)
                     if img_data and len(img_data) > 500:
                         await update.message.reply_photo(img_data)
                 except Exception as e:
