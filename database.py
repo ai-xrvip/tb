@@ -115,6 +115,16 @@ class Database:
                     UNIQUE(user_id, gift_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    user_id        INTEGER PRIMARY KEY,
+                    display_name   TEXT DEFAULT '',
+                    interests      TEXT DEFAULT '',
+                    facts          TEXT DEFAULT '[]',
+                    total_messages INTEGER DEFAULT 0,
+                    vip_tier       INTEGER DEFAULT 0,
+                    updated_at     TEXT
+                );
+
                 CREATE TABLE IF NOT EXISTS chat_summaries (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id      INTEGER NOT NULL,
@@ -609,6 +619,46 @@ class Database:
         """????????"""
         self.conn.execute("DELETE FROM role_announcements WHERE role_id=?", (role_id,))
         self.conn.commit()
+    # -- User Profile --
+    def get_profile(self, user_id):
+        row = self.conn.execute(
+            "SELECT * FROM user_profiles WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if row:
+            import json
+            return {
+                "user_id": row["user_id"],
+                "display_name": row["display_name"] or "",
+                "interests": row["interests"] or "",
+                "facts": json.loads(row["facts"] or "[]"),
+                "total_messages": row["total_messages"] or 0,
+                "vip_tier": row["vip_tier"] or 0,
+            }
+        return {"user_id": user_id, "display_name": "", "interests": "", "facts": [], "total_messages": 0, "vip_tier": 0}
+
+    def upsert_profile(self, user_id, display_name="", interests="", facts=None, total_messages=0):
+        import json
+        now = datetime.now(timezone.utc).isoformat()
+        facts_json = json.dumps(facts or [], ensure_ascii=False)
+        self.conn.execute(
+            "INSERT INTO user_profiles (user_id, display_name, interests, facts, total_messages, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "display_name = COALESCE(NULLIF(?, ''), display_name), "
+            "interests = CASE WHEN ? != '' THEN ? ELSE interests END, "
+            "facts = ?, total_messages = ?, updated_at = ?",
+            (user_id, display_name, interests, facts_json, total_messages, now,
+             display_name, interests, interests, facts_json, total_messages, now),
+        )
+        self.conn.commit()
+
+    def update_profile_tier(self, user_id, tier):
+        self.conn.execute(
+            "UPDATE user_profiles SET vip_tier = ?, updated_at = ? WHERE user_id = ?",
+            (tier, datetime.now(timezone.utc).isoformat(), user_id),
+        )
+        self.conn.commit()
+
     def backup_database(self) -> str | None:
         """Backup database to backups/ directory, returns path or None"""
         import shutil as _shutil

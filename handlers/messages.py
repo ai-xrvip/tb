@@ -314,6 +314,17 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
         }
         hint = tier_hints.get(user_tier, tier_hints[0])
         messages.append({"role": "system", "content": f"【用户等级】{hint}【重要】不要主动提及或承诺发送超出用户等级的内容。可以委婉地引导用户多聊天来解锁更多内容。"})
+
+        # 注入用户档案（名字、兴趣、重要信息）
+        try:
+            profile = db.get_profile(user_id)
+            if profile.get("display_name") or profile.get("interests") or profile.get("facts"):
+                p = profile
+                facts_str = " / ".join(p.get("facts", []))
+                profile_text = f"名字: {p.get("display_name", "?")} | 兴趣: {p.get("interests", "?")} | 重要: {facts_str}"
+                messages.append({"role": "system", "content": f"【用户档案】{profile_text}"})
+        except Exception:
+            pass
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
@@ -619,6 +630,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         messages.append({"role": "assistant", "content": full_reply})
         db.update_chat_history(user_id, messages)
+        # 更新用户档案
+        try:
+            prof = db.get_profile(user_id)
+            new_total = (prof.get("total_messages", 0) or 0) + 1
+            name = prof.get("display_name", "")
+            interests = prof.get("interests", "")
+            # 尝试从用户消息提取名字
+            for kw in ["叫", "是", "名字"]:
+                if kw in user_text and not name:
+                    parts = user_text.split(kw, 1)
+                    if len(parts) > 1:
+                        name = parts[1].strip()[:20]
+                        break
+            # 尝试从用户消息提取兴趣
+            for kw in ["喜欢", "爱好", "兴趣", "玩"]:
+                if kw in user_text and kw not in interests:
+                    interests = (interests + " " + user_text[:100]).strip()[:500]
+                    break
+            db.upsert_profile(user_id, display_name=name, interests=interests, total_messages=new_total)
+            db.update_profile_tier(user_id, unlock_tier)
+        except Exception:
+            pass
         db.increment_message_count(user_id)
         new_total = (user_data.get("total_messages", 0) or 0) + 1
         next_paywall = get_current_paywall(role_id, new_total, unlock_tier)

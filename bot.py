@@ -1,4 +1,4 @@
-﻿""" bot.py — Multi-Bot launcher with Polling & Webhook support """
+""" bot.py — Multi-Bot launcher with Polling & Webhook support """
 import os
 import sys
 import asyncio
