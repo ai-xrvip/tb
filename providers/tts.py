@@ -12,36 +12,65 @@ from config import config
 from utils.logger import logger
 
 # Azure neural voices
-VOICE_MAP = {
-    "cute": "zh-CN-XiaoyiNeural",
-    "mature": "zh-CN-XiaohanNeural",
-    "tsundere": "zh-CN-XiaomoNeural",
-    "gentle": "zh-CN-XiaoyiNeural",
-    "sexy": "zh-CN-XiaoxiaoNeural",
-    "default": "zh-CN-XiaochenNeural",
+# Per-role voice mapping (Azure zh-CN neural voices)
+ROLE_VOICE_MAP: dict[str, str] = {
+    # Cute / loli
+    "xiaolu": "zh-CN-XiaoyiNeural",     # 小鹿🦌 cosplayer JK 可爱
+    "yui":    "zh-CN-XiaoyiNeural",     # 结衣🏠 女仆咖啡 甜美
+
+    # Playful / cute
+    "yuki":   "zh-CN-XiaobeiNeural",    # 阿雪🎀 大学生 清纯可爱
+    "momo":   "zh-CN-XiaobeiNeural",    # 桃子🍰 甜点师 甜美
+
+    # Mature / professional
+    "linxi":  "zh-CN-XiaohanNeural",    # 林夕💼 投行VP 成熟御姐
+    "aya":    "zh-CN-XiaohanNeural",    # 阿彩💼 总裁助理 干练
+
+    # Tsundere / sharp / cool
+    "mizuki": "zh-CN-XiaomoNeural",     # 美月👠 CEO 高冷傲娇
+    "ruri":   "zh-CN-XiaomoNeural",     # 琉璃⚖️ 律师 冷静锐利
+    "rio":    "zh-CN-XiaomoNeural",     # 阿央🏎️ 赛车手 帅气冷酷
+
+    # Gentle / soft
+    "sunian": "zh-CN-XiaoshuangNeural", # 苏念🎨 美术老师 温柔文艺
+    "sora":   "zh-CN-XiaoshuangNeural", # 小空✈️ 空乘 温柔甜美
+    "sakura": "zh-CN-XiaoshuangNeural", # 小樱🐾 兽医 温柔有爱心
+    "hana":   "zh-CN-XiaoshuangNeural", # 小花🌷 花艺师 温柔
+
+    # Caring / soft-spoken
+    "akari":  "zh-CN-XiaoniNeural",     # 明丽💉 护士 温柔体贴
+    "fumi":   "zh-CN-XiaoniNeural",     # 阿文📖 图书管理员 安静柔和
+    "shiori": "zh-CN-XiaoniNeural",     # 诗织📚 文学研究生 文静
+
+    # Warm / charming
+    "yuna":   "zh-CN-XiaoxiaoNeural",   # 由奈💋 模特 温暖性感
+    "ren":    "zh-CN-XiaoxiaoNeural",   # 阿莲🍸 调酒师 温暖迷人
+    "nozomi": "zh-CN-XiaoxiaoNeural",   # 阿望🎙️ 配音演员 温暖多变
+
+    # Elegant / refined
+    "reina":  "zh-CN-XiaoxuanNeural",   # 玲奈👑 富豪千金 优雅
+    "mai":    "zh-CN-XiaoxuanNeural",   # 小舞🩰 芭蕾首席 优雅
+
+    # Natural / down-to-earth
+    "chiyo":  "zh-CN-XiaozhenNeural",   # 阿代🌸 海鲜餐厅 接地气
+    "koharu": "zh-CN-XiaozhenNeural",   # 小春📷 自由摄影师 自然洒脱
+
+    # Energetic / youthful
+    "mia":    "zh-CN-XiaoyanNeural",    # Mia⚡️ 健身私教 阳光活力
+    "nami":   "zh-CN-XiaoyanNeural",    # 阿波🏄‍♀️ 冲浪教练 阳光
+    "mei":    "zh-CN-XiaoyanNeural",    # 芽衣🎤 独立音乐人 个性活力
+
+    # Crisp / smart
+    "nana":   "zh-CN-XiaoruiNeural",    # 娜娜🎮 游戏主播 爽朗
+    "kaede":  "zh-CN-XiaoruiNeural",    # 阿枫🚔 刑警 干脆利落
+    "tsubaki":"zh-CN-XiaoruiNeural",    # 阿椿📰 调查记者 干练
+    "eri":    "zh-CN-XiaoruiNeural",    # 惠里🔬 AI研究员 智慧干练
 }
 
-TTS_TRIGGER_RATE = float(os.getenv("TTS_TRIGGER_RATE", "0.15"))
-ROLE_VOICE_MAP: dict[str, str] = {}
-
-
 def get_voice_for_role(role_id: str, role: dict = None) -> str:
-    if role_id in ROLE_VOICE_MAP:
-        return ROLE_VOICE_MAP[role_id]
-    if role is None:
-        return VOICE_MAP["default"]
-    role_str = str(role).lower()
-    if any(w in role_str for w in ["cute", "lovely", "sweet", "jk", "student", "cosplay"]):
-        return VOICE_MAP["cute"]
-    elif any(w in role_str for w in ["mature", "ceo", "lawyer", "doctor", "boss", "ol", "business"]):
-        return VOICE_MAP["mature"]
-    elif any(w in role_str for w in ["tsundere", "cold", "aloof", "sharp"]):
-        return VOICE_MAP["tsundere"]
-    elif any(w in role_str for w in ["gentle", "soft", "warm", "shy"]):
-        return VOICE_MAP["gentle"]
-    elif any(w in role_str for w in ["sexy", "seductive"]):
-        return VOICE_MAP["sexy"]
-    return VOICE_MAP["default"]
+    """Return the Azure neural voice for a given role_id."""
+    return ROLE_VOICE_MAP.get(role_id, "zh-CN-XiaochenNeural")
+
 
 
 # ---- Emoji / kaomoji stripping ----
