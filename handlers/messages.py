@@ -22,20 +22,18 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-from telegram.constants import ParseMode
 from config import config
 from database import db
-from roles import ROLES, get_role
+from roles import ROLES, get_role, get_current_paywall
 from utils.logger import logger
 from handlers.payment import send_paywall_card
 from handlers.yuanwei import try_trigger_yuanwei
 from handlers.keepsake import try_trigger_keepsake
-from roles import get_current_paywall, get_paywall
 from media_tags import get_media_config, get_folder, get_tier, get_tags_for_role, get_max_tier_for_text
-from providers import get_provider, ProviderType
 from providers.base import ProviderError, RateLimitError, TokenLimitError
-from relationship import get_mood_prompt, get_mood_for_user
+from relationship import get_mood_prompt, get_mood_for_user, get_relationship_prompt
 from environment import get_environment_context
+from localization import get_dialect_context
 from knowledge import get_knowledge_context
 from prompt_template import resolve_system_prompt
 try:
@@ -249,19 +247,22 @@ def _smart_folder_match(role_id: str, text: str) -> str | None:
     best_folder = None
     best_score = 0
     folder_keywords = {
-        "JK": ["jk", "??", "??", "???", "???"],
-        "Cos": ["cos", "cosplay", "??", "??"],
-        "??": ["??", "??", "??", "??"],
-        "??": ["??", "??", "??", "??", "ootd", "look"],
-        "??": ["??", "??", "??", "??", "??"],
-        "??": ["??", "??", "??", "??", "?"],
-        "??": ["??", "??", "??", "??"],
-        "??": ["??", "??", "??"],
-        "??": ["??", "?", "??"],
-        "??": ["??", "??"],
-        "??": ["??", "?"],
-        "??": ["??", "?", "?", "??", "??"],
-        "??": ["??", "??", "??", "??"],
+        "JK": ["jk", "制服", "校园", "学生", "校服"],
+        "Cos": ["cos", "cosplay", "角色", "扮演"],
+        "日常": ["日常", "生活", "普通", "居家"],
+        "穿搭": ["穿搭", "衣服", "搭配", "ootd", "look"],
+        "运动": ["运动", "健身", "跑步", "锻炼", "跑"],
+        "姿态": ["姿态", "动作", "姿势", "pose"],
+        "旅游": ["旅游", "旅行", "景点", "出门"],
+        "夜景": ["夜景", "夜晚", "晚上", "夜间"],
+        "起床": ["起床", "醒来", "早晨", "睡衣"],
+        "派对": ["派对", "聚会", "酒吧", "喝酒"],
+        "性感": ["性感", "诱惑", "迷人", "sexy"],
+        "泳装": ["泳装", "比基尼", "游泳"],
+        "沐浴": ["沐浴", "洗澡", "浴室", "浴缸"],
+        "情趣": ["情趣", "蕾丝", "睡衣", "内衣"],
+        "亲密": ["亲密", "拥抱", "接吻", "抱"],
+        "裸露": ["裸露", "裸", "不穿"],
     }
     for folder_name, keywords in folder_keywords.items():
         score = sum(len(kw) for kw in keywords if kw in text_lower)
@@ -286,21 +287,20 @@ def _pick_media_by_context(role_id: str, reply_text: str) -> str | None:
 def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     """构建发送给 LLM 的消息列表（含世界书/记忆）"""
     role = get_role(role_id)
-    system_prompt_raw = role["system_prompt"] if role else ""
     system_prompt = resolve_system_prompt(role, user_name="用户") if role else ""
 
-    messages = [{"role": "system", "content": system_prompt}]
+    # 合并多个 system prompt 以减少上下文占用
+    extra_system_parts = []
 
     # 加载世界书/记忆（关键词匹配 + 永久记忆）
     try:
         from lore import get_lore_context, get_lore_entries
         lore_ctx = get_lore_context(user_id, role_id)
-        # 关键词匹配：根据用户消息触发相关世界条目
         keyword_lore = get_lore_entries(role_id, user_text)
         if keyword_lore:
             lore_ctx = (lore_ctx or "") + "\n" + keyword_lore
         if lore_ctx:
-            messages.append({"role": "system", "content": f"[世界设定/记忆]\n{lore_ctx}"})
+            extra_system_parts.append(f"[世界设定/记忆]\n{lore_ctx}")
     except ImportError:
         pass
 
@@ -308,11 +308,11 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     try:
         rel_prompt = get_relationship_prompt(role_id, user_id)
         if rel_prompt:
-            messages.append({"role": "system", "content": rel_prompt})
+            extra_system_parts.append(rel_prompt)
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
-    # 注入用户解锁等级
+    # 注入用户解锁等级 + 档案
     try:
         user_tier = db.get_unlock_tier(user_id, role_id)
         tier_hints = {
@@ -322,16 +322,16 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
             3: "用户解锁等级3，所有内容均可发送。",
         }
         hint = tier_hints.get(user_tier, tier_hints[0])
-        messages.append({"role": "system", "content": f"【用户等级】{hint}【重要】不要主动提及或承诺发送超出用户等级的内容。可以委婉地引导用户多聊天来解锁更多内容。"})
+        extra_system_parts.append(f"【用户等级】{hint}【重要】不要主动提及或承诺发送超出用户等级的内容。")
 
-        # 注入用户档案（名字、兴趣、重要信息）
+        # 注入用户档案
         try:
             profile = db.get_profile(user_id)
             if profile.get("display_name") or profile.get("interests") or profile.get("facts"):
                 p = profile
                 facts_str = " / ".join(p.get("facts", []))
-                profile_text = f"名字: {p.get("display_name", "?")} | 兴趣: {p.get("interests", "?")} | 重要: {facts_str}"
-                messages.append({"role": "system", "content": f"【用户档案】{profile_text}"})
+                profile_text = f'名字: {p.get("display_name", "?")} | 兴趣: {p.get("interests", "?")} | 重要: {facts_str}'
+                extra_system_parts.append(f"【用户档案】{profile_text}")
         except Exception:
             pass
     except Exception as e:
@@ -340,7 +340,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     try:
         mood_prompt = get_mood_prompt(user_id, role_id)
         if mood_prompt:
-            messages.append({"role": "system", "content": mood_prompt})
+            extra_system_parts.append(mood_prompt)
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
@@ -348,46 +348,59 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     try:
         env_ctx = get_environment_context(role_id)
         if env_ctx:
-            messages.append({"role": "system", "content": env_ctx})
+            extra_system_parts.append(env_ctx)
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
-    # 注入知识图谱（用户记忆）
+    # 注入本地化方言指令
+    try:
+        dialect_ctx = get_dialect_context(role_id)
+        if dialect_ctx:
+            extra_system_parts.append(dialect_ctx)
+    except Exception as e:
+        logger.debug(f"Non-critical: {e}")
+
+    # 注入知识图谱 + 历史摘要
     try:
         knowledge_ctx = get_knowledge_context(user_id, role_id)
         if knowledge_ctx:
-            messages.append({"role": "system", "content": knowledge_ctx})
+            extra_system_parts.append(knowledge_ctx)
 
-        # Inject Deep Dream conversation summaries
         from deep_dream import get_summary_context
         summary_ctx = get_summary_context(user_id, role_id)
         if summary_ctx:
-            messages.append({"role": "system", "content": summary_ctx})
+            extra_system_parts.append(summary_ctx)
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
-    # 注入对话规则（核心：先了解用户再分享自己）
+    # 注入对话规则
     conv_rules = _get_conversation_rules(len(db.get_chat_history(user_id)))
+    extra_system_parts.append(conv_rules)
 
-    # ?? Inject available media tags ??
+    # 注入可用 media 标签
     try:
         from media_tags import get_tags_for_role
         role_tags = get_tags_for_role(role_id)
         available = []
-        import os
         media_dir = Path(__file__).parent.parent / "media" / role_id
         for tag, cfg in role_tags.items():
             folder = media_dir / cfg["folder"]
             if folder.is_dir() and any(f.suffix.lower() in (".jpg",".jpeg",".png",".webp") for f in folder.iterdir()):
                 available.append(f"{tag}({cfg['folder']})")
         if available:
-            media_instruction = "\n\n???????\n?????????????????????????\n?????" + ", ".join(available) + "\n????????????????"
-            messages.append({"role": "system", "content": media_instruction})
+            available_tags = ", ".join(available)
+            extra_system_parts.append(
+                f"\n\n你可以在对话中自然发送以下类型的图片：\n{available_tags}\n"
+                f"在文本中插入 [media:标签名] 来附上对应图片。不要硬塞，要自然融入。"
+            )
     except Exception:
         pass
-    messages.append({"role": "system", "content": conv_rules})
 
-        # 加载旧的摘要
+    # 合并所有 extra system prompt 为一条消息
+    if extra_system_parts:
+        messages.append({"role": "system", "content": "\n\n".join(extra_system_parts)})
+
+    # 加载旧的摘要（这些是 JSON，需要独立）
     summaries = db.get_chat_summaries(user_id)
     for s in summaries:
         messages.append({
@@ -424,12 +437,8 @@ async def _check_and_summarize(user_id: int):
     )
 
     try:
-        provider = get_provider(
-            ProviderType.DEEPSEEK,
-            api_key=config.DEEPSEEK_API_KEY,
-            base_url=config.DEEPSEEK_BASE_URL,
-            model=config.DEEPSEEK_MODEL,
-        )
+        from providers.factory import get_provider_from_config
+        provider = get_provider_from_config()
         summary = await provider.chat(
             messages=[{"role": "user", "content": summary_prompt}],
             max_tokens=300,
@@ -445,30 +454,14 @@ async def _check_and_summarize(user_id: int):
 
 async def _get_provider_for_role(role_id: str):
     """根据角色配置获取 LLM 提供商"""
-    provider_type_str = config.LLM_PROVIDER or "deepseek"
-
-    if provider_type_str == "deepseek":
-        return get_provider(
-            ProviderType.DEEPSEEK,
-            api_key=config.DEEPSEEK_API_KEY,
-            base_url=config.DEEPSEEK_BASE_URL,
-            model=config.DEEPSEEK_MODEL,
-        )
-    elif provider_type_str == "openai":
-        return get_provider(
-            ProviderType.OPENAI,
-            api_key=config.OPENAI_API_KEY,
-            base_url=config.OPENAI_BASE_URL,
-            model=config.OPENAI_MODEL,
-        )
-    else:
-        raise ValueError(f"Unsupported provider: {provider_type_str}")
+    from providers.factory import get_provider_from_config
+    return get_provider_from_config()
 
 
 
 async def _generate_and_send(update, reply_text, role_id, role_name):
     try:
-        img_data = await generate_image(reply_text, role_id, role_name)
+        img_data = await generate_image(reply_text, role_id)
         if img_data:
             await update.message.reply_photo(img_data)
     except Exception as e:
@@ -478,7 +471,7 @@ async def _generate_and_send(update, reply_text, role_id, role_name):
 async def _pregenerate_photo(update, user_id, reply_text, role_id, role_name, pending_dict):
     """Pre-generate photo in background, store for next user confirmation."""
     try:
-        img_data = await generate_image(reply_text, role_id, role_name)
+        img_data = await generate_image(reply_text, role_id)
         if img_data and len(img_data) > 500:
             pending_dict[user_id] = img_data
             logger.info(f"Pre-generated photo for user {user_id}, waiting for confirmation")
@@ -520,6 +513,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if unlock_tier == 0 and free_count > 0:
         db.use_free_count(user_id)
 
+    # Build messages AFTER counting/charging to avoid stale counts
     messages = _build_messages(user_id, role_id, user_text)
     await update.message.chat.send_action(action="typing")
 
@@ -598,7 +592,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            "穿了", "换了", "超好看"]
             if any(kw in clean_reply for kw in visual_intent):
                 try:
-                    img_data = await generate_image(clean_reply, role.get("name", ""))
+                    img_data = await generate_image(clean_reply, role_id)
                     if img_data and len(img_data) > 500:
                         await update.message.reply_photo(img_data)
                 except Exception as e:
@@ -618,10 +612,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        # -- Post-reply cleanup (wrapped to prevent error propagation) --
+        # -- Post-reply cleanup --
     try:
-        messages.append({"role": "assistant", "content": full_reply})
-        db.update_chat_history(user_id, messages)
+        # Only save conversation messages (user + assistant), NOT system prompts
+        # Extract the messages that are from the actual conversation
+        conversation_msgs = [m for m in messages if m["role"] in ("user", "assistant")]
+        conversation_msgs.append({"role": "assistant", "content": full_reply})
+        db.update_chat_history(user_id, conversation_msgs)
         # 更新用户档案
         try:
             prof = db.get_profile(user_id)
@@ -641,6 +638,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     interests = (interests + " " + user_text[:100]).strip()[:500]
                     break
             # 提取重要信息（每10条消息用AI提取一次）
+            # 自动去重，宽松上限100条（每条5字以内，100条仅~500字，不影响上下文）
             facts = prof.get("facts", [])
             if new_total % 10 == 0 and full_reply:
                 try:
@@ -649,8 +647,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     fact = (await provider.chat(messages=[{"role":"user","content":fact_prompt}], max_tokens=20, temperature=0.3)).strip()
                     if fact and len(fact) <= 15 and fact not in facts:
                         facts.append(fact)
-                        if len(facts) > 10:
-                            facts = facts[-10:]
+                        if len(facts) > 100:
+                            facts = facts[-100:]  # 最多保留100条
                 except Exception:
                     pass
             db.upsert_profile(user_id, display_name=name, interests=interests, facts=facts, total_messages=new_total)

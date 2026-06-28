@@ -9,7 +9,6 @@
 4. 用户选择 → 地址收集(姓名→电话→地址→确认)
 5. 确认后保存订单到 keepsake_orders 表
 """
-import os
 import random
 import uuid
 import time

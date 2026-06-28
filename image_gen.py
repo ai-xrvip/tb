@@ -57,8 +57,14 @@ def _get_reference_b64(role_id: str) -> str | None:
         return None
 
 
-def _build_visual_prompt(text: str, role_name: str = "") -> str:
+def _build_visual_prompt(text: str, role_id: str = "") -> str:
     """Build visual prompt with fixed character description + scene from AI reply."""
+    # Look up role name from role_id
+    role_name = ""
+    if role_id:
+        from roles import ROLES
+        role = ROLES.get(role_id, {})
+        role_name = role.get("name", "")
     char_desc = _get_character_desc(role_name)
     text = text.strip()[:300]
     quality = (
@@ -68,15 +74,22 @@ def _build_visual_prompt(text: str, role_name: str = "") -> str:
     return char_desc + ", " + quality + " -- scene: " + text
 
 
-async def generate_image(prompt: str, role_name: str = "") -> bytes | None:
+async def generate_image(prompt: str, role_id: str = "") -> bytes | None:
     """Generate image from text using Pollinations.ai img2img."""
     if not config.IMAGE_GEN_ENABLED:
         return None
 
-    visual_prompt = _build_visual_prompt(prompt, role_name)
+    # Look up role name from role_id
+    role_name = ""
+    if role_id:
+        from roles import ROLES
+        role = ROLES.get(role_id, {})
+        role_name = role.get("name", "")
+
+    visual_prompt = _build_visual_prompt(prompt, role_id)
 
     # Try with reference photo first (img2img)
-    ref_b64 = _get_reference_b64(role_name)
+    ref_b64 = _get_reference_b64(role_id)
     if ref_b64:
         result = await _pollinations_img2img(visual_prompt, ref_b64)
         if result:

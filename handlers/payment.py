@@ -233,9 +233,21 @@ async def handle_paywall_callback(update: Update, context: ContextTypes.DEFAULT_
 
 # ── Webhook: 易支付回调 ──
 async def handle_epay_callback(order_id: str, trade_status: str):
-    """处理易支付异步回调"""
+    """处理易支付异步回调，支持普通解锁和礼物购买"""
     if trade_status != "TRADE_SUCCESS":
         logger.warning(f"epay callback: order {order_id} status={trade_status}")
         return
+
+    order = db.get_payment_order(order_id)
+    if not order or order["status"] != "pending":
+        return
+
+    # Gift order: role_id == "gift"
+    if order["role_id"] == "gift":
+        gift_name = order.get("item_name", "")
+        gift_id = gift_name
+        db.add_gift_purchase(order["user_id"], gift_id, gift_name, order["amount"])
+        logger.info(f"EPay gift callback: {gift_name} for user {order['user_id']}")
+
     db.mark_order_paid(order_id)
     logger.info(f"epay callback: order {order_id} paid and unlocked")

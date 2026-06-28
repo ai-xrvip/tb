@@ -13,7 +13,6 @@ from config import config
 from database import db
 from roles import ROLES
 from utils.logger import logger
-from providers import get_provider, ProviderType
 
 # 朋友圈文案模板（每个角色5-8条）
 MOMENTS_TEMPLATES = {
@@ -360,17 +359,8 @@ async def handle_moment_say(update: Update, context: ContextTypes.DEFAULT_TYPE):
     messages.append({"role": "user", "content": user_text})
 
     try:
-        provider_type = config.LLM_PROVIDER or "deepseek"
-        if provider_type == "openai":
-            provider = get_provider(
-                ProviderType.OPENAI, api_key=config.OPENAI_API_KEY,
-                base_url=config.OPENAI_BASE_URL, model=config.OPENAI_MODEL,
-            )
-        else:
-            provider = get_provider(
-                ProviderType.DEEPSEEK, api_key=config.DEEPSEEK_API_KEY,
-                base_url=config.DEEPSEEK_BASE_URL, model=config.DEEPSEEK_MODEL,
-            )
+        from providers.factory import get_provider_from_config
+        provider = get_provider_from_config()
 
         reply = await provider.chat(messages=messages, max_tokens=500, temperature=0.9)
 
@@ -387,7 +377,7 @@ async def handle_moment_say(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Send AI reply
             await query.message.reply_text(reply)
             # Update message count
-            db.increment_message(user_id)
+            db.increment_message_count(user_id)
             db.update_role(user_id, role_id)
             db.update_last_message_time(user_id)
     except Exception as e:

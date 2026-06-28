@@ -3,9 +3,7 @@ Deep Dream — Nightly conversation summarization.
 Runs once per day, summarizes each user's conversations into long-term memory.
 """
 from database import db
-from config import config
 from utils.logger import logger
-from providers import get_provider, ProviderType
 
 SUMMARY_PROMPT = """You are a memory summarizer. Below is today's conversation between a user and their AI girlfriend character.
 
@@ -38,17 +36,8 @@ async def summarize_user_conversation(user_id: int, role_id: str):
         return None
 
     try:
-        provider_type = config.LLM_PROVIDER or "deepseek"
-        if provider_type == "openai":
-            provider = get_provider(
-                ProviderType.OPENAI, api_key=config.OPENAI_API_KEY,
-                base_url=config.OPENAI_BASE_URL, model=config.OPENAI_MODEL,
-            )
-        else:
-            provider = get_provider(
-                ProviderType.DEEPSEEK, api_key=config.DEEPSEEK_API_KEY,
-                base_url=config.DEEPSEEK_BASE_URL, model=config.DEEPSEEK_MODEL,
-            )
+        from providers.factory import get_provider_from_config
+        provider = get_provider_from_config()
 
         summary = await provider.chat(
             messages=[

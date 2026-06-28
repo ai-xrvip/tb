@@ -71,3 +71,22 @@ def list_providers() -> list[str]:
         register_provider(ProviderType.DEEPSEEK, DeepSeekProvider)
         register_provider(ProviderType.OPENAI, OpenAIProvider)
     return [p.value for p in _provider_registry]
+
+
+def get_provider_from_config() -> BaseProvider:
+    """Get the LLM provider based on current config settings."""
+    provider_type_str = config.LLM_PROVIDER or "deepseek"
+    if provider_type_str == "openai":
+        return get_provider(
+            ProviderType.OPENAI,
+            api_key=config.OPENAI_API_KEY,
+            base_url=config.OPENAI_BASE_URL,
+            model=config.OPENAI_MODEL,
+        )
+    else:
+        return get_provider(
+            ProviderType.DEEPSEEK,
+            api_key=config.DEEPSEEK_API_KEY,
+            base_url=config.DEEPSEEK_BASE_URL,
+            model=config.DEEPSEEK_MODEL,
+        )

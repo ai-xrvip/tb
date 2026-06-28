@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""生成 roles.py + 30个中国地域化角色简介"""
+"""Generate roles.py + 30 localized character profiles"""
 import os
 
-BASE = r"C:\Users\13249\Documents\Codex\2026-06-21\ai-xrvip-tgbot-https-github-com"
+BASE = os.path.dirname(os.path.abspath(__file__))
 PROFILE_DIR = os.path.join(BASE, "outputs", "character_profiles")
 os.makedirs(PROFILE_DIR, exist_ok=True)
 for f in os.listdir(PROFILE_DIR):

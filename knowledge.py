@@ -97,15 +97,9 @@ async def extract_knowledge_from_conversation(
         conv_text = conv_text[-2000:]
 
     try:
-        from providers import get_provider, ProviderType
-        from config import config
+        from providers.factory import get_provider_from_config
 
-        provider = get_provider(
-            ProviderType.DEEPSEEK,
-            api_key=config.DEEPSEEK_API_KEY,
-            base_url=config.DEEPSEEK_BASE_URL,
-            model=config.DEEPSEEK_MODEL,
-        )
+        provider = get_provider_from_config()
         response = await provider.chat(
             messages=[
                 {"role": "system", "content": "你只输出JSON，不要其他内容。"},

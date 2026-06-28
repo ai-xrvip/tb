@@ -8,7 +8,6 @@
 4. 用户选择物品 → 进入地址收集流程(姓名→电话→地址→确认)
 5. 确认后保存订单，强调"真的会发出"
 """
-import os
 import random
 import uuid
 import time

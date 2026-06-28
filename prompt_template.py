@@ -3,43 +3,8 @@ Prompt 模板引擎 —— 参考 Dify 的模板变量设计
 支持在 system_prompt 中使用 {time} {weather} {user_name} {mood} {relationship} 等动态变量
 每次请求前自动替换为实时值，让提示词管理从硬编码变成可配置
 """
-import re
-import os
-import time
 from datetime import datetime, timezone, timedelta
-from typing import Optional
-
-# 天气 API —— 用 wttr.in，不需要 API Key
-WEATHER_API = "https://wttr.in/{city}?format=%C+%t+%h"
-
-
-# 角色所在城市
-from cities import ROLE_CITIES
-
-# 天气缓存（每30分钟刷新）
-_weather_cache: dict[str, str] = {}
-_weather_cache_time: float = 0
-
-
-def _get_weather_str(city: str) -> str:
-    """获取城市天气描述字符串"""
-    global _weather_cache, _weather_cache_time
-    now = time.time()
-
-    if city in _weather_cache and now - _weather_cache_time < 1800:
-        return _weather_cache[city]
-
-    try:
-        import urllib.request
-        url = WEATHER_API.format(city=city)
-        req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            result = resp.read().decode("utf-8").strip()
-            _weather_cache[city] = result
-            _weather_cache_time = now
-            return result
-    except Exception:
-        return ""
+from cities import ROLE_CITIES, get_weather_str
 
 
 def _get_time_of_day_str() -> str:
@@ -92,7 +57,7 @@ def resolve_template(system_prompt: str, **kwargs) -> str:
 
     # 天气
     city = ROLE_CITIES.get(role_id, "Beijing")
-    weather_str = _get_weather_str(city)
+    weather_str = get_weather_str(city)
 
     # 替换
     result = system_prompt
@@ -120,8 +85,8 @@ def resolve_system_prompt(role: dict, user_name: str = "宝贝", mood_str: str =
     role_id = role.get("id", "xiaolu")
     role_name = role.get("name", "")
     prompt = role.get("system_prompt", "")
-    # Add global emoji instruction
-    prompt += "\n\n【表情使用规则 - 非常重要】\n你必须使用Telegram原生emoji表情符号(如☺❤️✨😉💕🎀🌟😜🤭🥰😘💋🔥👀💦💋)，绝对不能使用颜文字(如(^∇^)、(*/ω＼*)、(>～<)等)。每句话末尾至少加1-2个Telegram emoji，使用颜文字是严重违规，将导致回复被拒绝。\n"
+    # Add emoji instruction
+    prompt += "\n\n【表情使用规则】\n可以使用Telegram原生emoji表情符号(如☺❤️✨😉💕🎀🌟😜🤭🥰😘💋🔥👀💦💋)或颜文字(如(^∇^)、(*/ω＼*)、(>～<)等)来增加表达力，让回复更生动。\n"
     return resolve_template(
         prompt,
         role_id=role_id,

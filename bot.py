@@ -5,11 +5,12 @@ import asyncio
 import random
 import threading
 import time
+import json
 from pathlib import Path
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, filters, ContextTypes,
@@ -17,7 +18,7 @@ from telegram.ext import (
 from config import config
 from deep_dream import summarize_user_conversation
 from roles import ROLES, get_role
-from database import db  # noqa: F401
+from database import db
 from utils.logger import logger
 try:
     from db_sync import download_db, upload_db, sync_loop
@@ -112,7 +113,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
             try:
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length)
-                import json
                 update_data = json.loads(body)
                 asyncio.run_coroutine_threadsafe(
                     app.process_update(Update.de_json(update_data, app.bot)),
@@ -129,18 +129,16 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def _send_health(self):
-        import json as _json
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(_json.dumps({
+        self.wfile.write(json.dumps({
             "status": "ok",
             "active_bots": len(self.apps),
             "provider": config.LLM_PROVIDER,
         }).encode())
 
     def _send_health_json(self):
-        import json as _json
         try:
             from database import db as _db
             user_count = _db.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] if hasattr(_db, "conn") else 0
@@ -149,7 +147,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(_json.dumps({
+        self.wfile.write(json.dumps({
             "status": "ok",
             "active_bots": len(self.apps),
             "users": user_count,
@@ -166,18 +164,13 @@ class WebhookHandler(BaseHTTPRequestHandler):
             order_id = params.get("out_trade_no", [None])[0]
             trade_status = params.get("trade_status", [None])[0]
             if order_id and trade_status == "TRADE_SUCCESS":
-                # Check if this is a gift order
-                order = db.get_payment_order(order_id)
-                if order and order["role_id"] == "gift":
-                    db.mark_order_paid(order_id)
-                    # Add the gift
-                    gift_name = order.get("item_name", "")
-                    gift_id = gift_name  # fallback
-                    db.add_gift_purchase(order["user_id"], gift_id, gift_name, order["amount"])
-                    logger.info(f"EPay gift callback: {gift_name} for user {order['user_id']}")
-                else:
-                    db.mark_order_paid(order_id)
-                logger.info(f"EPay callback: order {order_id} paid OK")
+                import asyncio
+                from handlers.payment import handle_epay_callback
+                loop = self.loop if hasattr(self, 'loop') and self.loop else None
+                if loop:
+                    asyncio.run_coroutine_threadsafe(
+                        handle_epay_callback(order_id, trade_status), loop
+                    )
             else:
                 logger.warning(f"EPay callback: order={order_id} status={trade_status}")
             self.send_response(200)
@@ -298,6 +291,11 @@ def build_single_bot(role_id: str, token: str) -> Application:
         name=f"moments_{role_id}",
     )
 
+    return app
+
+
+def _register_global_jobs(app: Application):
+    """Register global (once-per-process) tasks — cleanup, backup, deep dream."""
     # -- Inactive user cleanup: daily --
     app.job_queue.run_repeating(
         lambda ctx: db.cleanup_inactive_users(180),
@@ -314,7 +312,7 @@ def build_single_bot(role_id: str, token: str) -> Application:
         name="db_backup",
     )
 
-    # ── Deep Dream: nightly at 3am ──
+    # ── Deep Dream: nightly at 3am for ALL roles ──
     import datetime as _dt
     now = _dt.datetime.now()
     target = now.replace(hour=3, minute=0, second=0, microsecond=0)
@@ -322,22 +320,29 @@ def build_single_bot(role_id: str, token: str) -> Application:
         target += _dt.timedelta(days=1)
     first_delay = (target - now).total_seconds()
     app.job_queue.run_repeating(
-        lambda ctx: _deep_dream_job(ctx, role_id),
+        lambda ctx: _deep_dream_all_roles(ctx),
         interval=86400,
         first=int(first_delay),
         name="deep_dream",
     )
 
-    return app
+
+async def _deep_dream_all_roles(context):
+    """Run deep dream for all active roles."""
+    from config import config as _cfg
+    active = _cfg.get_active_bots()
+    for rid in active:
+        try:
+            users = db.get_active_users_for_role(rid)
+            for uid in users[:50]:
+                await summarize_user_conversation(uid, rid)
+        except Exception as e:
+            logger.error(f"Deep Dream job error ({rid}): {e}")
 
 
 async def _deep_dream_job(context, role_id: str):
-    try:
-        users = db.get_active_users_for_role(role_id)
-        for uid in users[:50]:
-            await summarize_user_conversation(uid, role_id)
-    except Exception as e:
-        logger.error(f"Deep Dream job error ({role_id}): {e}")
+    """Legacy single-role deep dream (kept for compatibility)."""
+    await _deep_dream_all_roles(context)
 
 
 async def cmd_announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -528,41 +533,18 @@ async def main():
             # New role channel announcement
             await announce_new_role(app, role_id)
 
+        # Register global tasks only on the first bot
+        if apps:
+            first_app = list(apps.values())[0]
+            _register_global_jobs(first_app)
+
         logger.info(f"All {len(apps)} bots running via webhook")
-
-        # DB Backup task
-        async def _webhook_backup():
-            while not _shutdown_flag:
-                try:
-                    upload_db(config.DB_PATH)
-                except Exception as e:
-                    logger.error(f"Backup error: {e}")
-                await asyncio.sleep(3600)
-        asyncio.create_task(_webhook_backup())
-
-        # Deep Dream task
-        async def _webhook_deep_dream():
-            import datetime as _dt2
-            while not _shutdown_flag:
-                now2 = _dt2.datetime.now()
-                target2 = now2.replace(hour=3, minute=0, second=0, microsecond=0)
-                if target2 <= now2:
-                    target2 += _dt2.timedelta(days=1)
-                await asyncio.sleep((target2 - now2).total_seconds())
-                for rid in apps:
-                    try:
-                        users = db.get_active_users_for_role(rid)
-                        for uid in users[:50]:
-                            await summarize_user_conversation(uid, rid)
-                    except Exception as e:
-                        logger.error(f"Deep Dream error ({rid}): {e}")
-        asyncio.create_task(_webhook_deep_dream())
 
         while not _shutdown_flag:
             await asyncio.sleep(3600)
     else:
         # ── Polling mode ──
-        tasks = [run_bot_polling(rid, tok) for rid, tok in active_bots.items()]
+        tasks = [run_bot_polling(rid, tok, idx, len(active_bots)) for idx, (rid, tok) in enumerate(active_bots.items())]
         await asyncio.gather(*tasks)
 
     # Cleanup
@@ -574,9 +556,12 @@ async def main():
 
 
 # ── Polling mode ──
-async def run_bot_polling(role_id: str, token: str):
+async def run_bot_polling(role_id: str, token: str, bot_index: int = 0, total_bots: int = 1):
     role = ROLES.get(role_id, {"name": role_id})
     app = build_single_bot(role_id, token)
+    # Register global tasks only on the first bot
+    if bot_index == 0:
+        _register_global_jobs(app)
     await app.initialize()
     await app.start()
     logger.info(f"Polling started: {role['name']} ({role_id})")

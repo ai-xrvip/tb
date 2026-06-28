@@ -494,9 +494,9 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def is_announced(self, role_id: str) -> bool:
+    def is_announced(self, role_id: str, channel_id: str = "") -> bool:
         row = self.conn.execute(
-            "SELECT 1 FROM role_announcements WHERE role_id = ?", (role_id,)
+            "SELECT 1 FROM role_announcements WHERE role_id = ? AND channel_id = ?", (role_id, channel_id)
         ).fetchone()
         return row is not None
 
@@ -518,13 +518,11 @@ class Database:
         return row is not None
 
     def mark_yuanwei_triggered(self, user_id, role_id):
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         self.conn.execute("INSERT OR IGNORE INTO yuanwei_triggers (user_id, role_id, triggered_at) VALUES (?,?,?)", (user_id, role_id, now))
         self.conn.commit()
 
     def create_yuanwei_order(self, order_id, user_id, role_id, item_id, item_name, amount, name, phone, address):
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         self.conn.execute("INSERT INTO yuanwei_orders (order_id,user_id,role_id,item_id,item_name,amount,recipient_name,recipient_phone,recipient_address,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,'pending',?)", (order_id, user_id, role_id, item_id, item_name, amount, name, phone, address, now))
         self.conn.commit()
@@ -542,13 +540,11 @@ class Database:
         return row is not None
 
     def mark_keepsake_triggered(self, user_id, role_id):
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         self.conn.execute("INSERT OR IGNORE INTO keepsake_triggers (user_id, role_id, triggered_at) VALUES (?,?,?)", (user_id, role_id, now))
         self.conn.commit()
 
     def create_keepsake_order(self, order_id, user_id, role_id, item_id, item_name, amount, name, phone, address):
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         self.conn.execute("INSERT INTO keepsake_orders (order_id,user_id,role_id,item_id,item_name,amount,recipient_name,recipient_phone,recipient_address,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,'pending',?)", (order_id, user_id, role_id, item_id, item_name, amount, name, phone, address, now))
         self.conn.commit()
@@ -558,7 +554,6 @@ class Database:
         return [dict(r) for r in rows]
 
     def has_checked_in_today(self, user_id):
-        from datetime import datetime, timezone
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         row = self.conn.execute(
             "SELECT 1 FROM daily_checkins WHERE user_id=? AND checkin_date=?",
@@ -567,7 +562,6 @@ class Database:
         return row is not None
 
     def do_checkin(self, user_id):
-        from datetime import datetime, timezone
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         self.conn.execute(
             "INSERT OR IGNORE INTO daily_checkins (user_id, checkin_date) VALUES (?,?)",

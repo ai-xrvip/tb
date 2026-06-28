@@ -15,33 +15,30 @@ class RateLimiter:
         self._lock = asyncio.Lock()
         self._last_cleanup: float = 0
 
+    def _cleanup_stale(self, now: float):
+        """清理僵尸用户（每5分钟执行一次）"""
+        if now - self._last_cleanup <= 300:
+            return
+        cleanup_window = now - self.window_seconds * 10
+        stale = [uid for uid in list(self._requests.keys())
+                 if not any(t > cleanup_window for t in self._requests[uid])]
+        for uid in stale:
+            del self._requests[uid]
+        self._last_cleanup = now
+
+    def _trim_user(self, user_id: int, now: float):
+        """清理单个用户的过期记录"""
+        window_start = now - self.window_seconds
+        self._requests[user_id] = [
+            t for t in self._requests[user_id] if t > window_start
+        ]
+
     async def is_allowed(self, user_id: int) -> bool:
         """检查用户是否在限制内"""
         async with self._lock:
             now = time.time()
-            window_start = now - self.window_seconds
-            # 每5分钟清理一次：删除 10*窗口期 内无任何请求的僵尸用户
-            cleanup_window = now - self.window_seconds * 10
-            if now - self._last_cleanup > 300:
-                stale = [uid for uid in list(self._requests.keys()) if not any(t > cleanup_window for t in self._requests[uid])]
-                for uid in stale:
-                    del self._requests[uid]
-                self._last_cleanup = now
-
-
-            # Per-minute cleanup of stale user entries to prevent memory leaks
-            if now - self._last_cleanup > 300:
-                stale = [uid for uid in list(self._requests.keys())
-                         if not any(t > window_start for t in self._requests[uid])]
-                for uid in stale:
-                    del self._requests[uid]
-                self._last_cleanup = now
-
-
-            # 清理旧记录
-            self._requests[user_id] = [
-                t for t in self._requests[user_id] if t > window_start
-            ]
+            self._cleanup_stale(now)
+            self._trim_user(user_id, now)
 
             if len(self._requests[user_id]) >= self.max_requests:
                 return False
@@ -53,27 +50,8 @@ class RateLimiter:
         """获取剩余请求数"""
         async with self._lock:
             now = time.time()
-            window_start = now - self.window_seconds
-            # 每5分钟清理一次：删除 10*窗口期 内无任何请求的僵尸用户
-            cleanup_window = now - self.window_seconds * 10
-            if now - self._last_cleanup > 300:
-                stale = [uid for uid in list(self._requests.keys()) if not any(t > cleanup_window for t in self._requests[uid])]
-                for uid in stale:
-                    del self._requests[uid]
-                self._last_cleanup = now
-
-
-            # Per-minute cleanup of stale user entries to prevent memory leaks
-            if now - self._last_cleanup > 300:
-                stale = [uid for uid in list(self._requests.keys())
-                         if not any(t > window_start for t in self._requests[uid])]
-                for uid in stale:
-                    del self._requests[uid]
-                self._last_cleanup = now
-
-            self._requests[user_id] = [
-                t for t in self._requests[user_id] if t > window_start
-            ]
+            self._cleanup_stale(now)
+            self._trim_user(user_id, now)
             return max(0, self.max_requests - len(self._requests[user_id]))
 
 
