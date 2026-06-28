@@ -1,25 +1,52 @@
-# Image generation via Pollinations.ai img2img using CDN reference URLs
+﻿# Image generation via Pollinations.ai img2img using CDN reference URLs
 import os, random, urllib.request, urllib.parse, httpx
 from pathlib import Path
 from config import config
 from utils.logger import logger
 
 POLLINATIONS_URL = 'https://image.pollinations.ai/prompt'
-GEN_TIMEOUT = 45
+GEN_TIMEOUT = 60
+
+# ── Negative prompt: fix bad hands, anatomy, quality ──
+NEGATIVE_PROMPT = (
+    'bad hands, ugly hands, missing fingers, extra fingers, fused fingers, '
+    'poorly drawn hands, deformed hands, mutated hands, disfigured fingers, '
+    'bad anatomy, deformed anatomy, disfigured, mutated, extra limbs, '
+    'blurry, low quality, jpeg artifacts, watermark, text, signature, '
+    'ugly face, asymmetric eyes, distorted face, deformed face, '
+    'bad proportions, long neck, cloned face, double face, '
+    'worst quality, lowres, error, cropped, out of frame, '
+    'poorly drawn feet, bad feet, extra toes, missing toes'
+)
 
 CHARACTER_PREFIX = {
-    'xiaolu': 'cute young Asian woman, sweet smile, cosplayer, JK uniform, twin tails, soft makeup, fair skin',
-    'linxi': 'elegant Asian woman, OL outfit, high heels, sharp eyes, mature beauty, black hair, red lips',
-    'mia': 'innocent Asian woman, sundress, long wavy hair, doe eyes, natural makeup, soft lighting',
-    'sunian': 'gentle Asian woman, traditional hanfu, classical beauty, long black hair, elegant posture',
+    'xiaolu': 'cute young Asian woman, sweet smile, cosplayer, JK uniform, twin tails, soft makeup, fair skin, perfect hands, slender fingers',
+    'linxi': 'elegant Asian woman, OL outfit, high heels, sharp eyes, mature beauty, black hair, red lips, perfect hands',
+    'mia': 'innocent Asian woman, sundress, long wavy hair, doe eyes, natural makeup, soft lighting, perfect hands',
+    'sunian': 'gentle Asian woman, traditional hanfu, classical beauty, long black hair, elegant posture, perfect hands, delicate fingers',
 }
-DEFAULT_CHARACTER = 'beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup'
+DEFAULT_CHARACTER = 'beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup, perfect hands'
+
+# Per-role extra negative prompts (merged with global NEGATIVE_PROMPT)
+ROLE_NEGATIVES = {
+    'xiaolu': 'nsfw, nude, revealing, skimpy, lingerie, bikini, muscular, tall',
+}
+
+# Fallback reference URLs when GitHub CDN is unavailable (e.g. ImgBB / telegraph)
+FALLBACK_REF_URLS = {}
 
 def _get_character_desc(role_name):
     for key, desc in CHARACTER_PREFIX.items():
         if key in role_name.lower() or role_name in key:
             return desc
     return DEFAULT_CHARACTER
+
+def _get_negative_prompt(role_id=''):
+    base = NEGATIVE_PROMPT
+    extra = ROLE_NEGATIVES.get(role_id, '')
+    if extra:
+        return base + ', ' + extra
+    return base
 
 _REF_CDN_BASE = 'https://raw.githubusercontent.com/ai-xrvip/tb/main/refs'
 
@@ -83,21 +110,27 @@ def _build_visual_prompt(text, role_id=''):
         role_name = role.get('name', '')
     char_desc = _get_character_desc(role_name)
     text = text.strip()[:300]
-    quality = 'high quality, photorealistic, soft natural lighting, detailed skin texture, cinematic composition, 8k, masterpiece'
+    quality = 'high quality, photorealistic, soft natural lighting, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece'
     return char_desc + ', ' + quality + ' -- scene: ' + text
 
 async def generate_image(prompt, role_id=''):
     if not config.IMAGE_GEN_ENABLED:
         return None
     visual_prompt = _build_visual_prompt(prompt, role_id)
+    negative = _get_negative_prompt(role_id)
     logger.info(f'Image gen requested for {role_id}, prompt: {prompt[:80]}...')
     try:
         ref_url = _get_reference_url(role_id)
         if not ref_url:
-            logger.warning(f'No reference URL for {role_id}')
-            return None
+            fallback_url = FALLBACK_REF_URLS.get(role_id)
+            if fallback_url:
+                ref_url = fallback_url
+                logger.info(f'Using fallback ref for {role_id}: {ref_url[:60]}...')
+            else:
+                logger.warning(f'No reference URL for {role_id}')
+                return None
         logger.info(f'img2img with ref: {ref_url[:80]}...')
-        result = await _pollinations_img2img(visual_prompt, ref_url)
+        result = await _pollinations_img2img(visual_prompt, ref_url, negative)
         if result:
             logger.info(f'img2img success: {len(result)} bytes')
             return result
@@ -106,20 +139,25 @@ async def generate_image(prompt, role_id=''):
         logger.error(f'img2img exception: {e}')
     return None
 
-async def _pollinations_img2img(prompt, ref_url):
+async def _pollinations_img2img(prompt, ref_url, negative=''):
     try:
         encoded = urllib.parse.quote(prompt, safe='')
-        url = POLLINATIONS_URL + '/' + encoded + '?image=' + urllib.parse.quote(ref_url, safe='') + '&strength=0.75&nologo=true&width=1024&height=1024'
-        logger.info(f'img2img URL: {len(url)} chars')
+        params = (
+            '?image=' + urllib.parse.quote(ref_url, safe='')
+            + '&strength=0.75&nologo=true&width=1024&height=1024'
+            + '&seed=' + str(random.randint(1, 2147483647))
+        )
+        if negative:
+            params += '&negative=' + urllib.parse.quote(negative, safe='')
+        url = POLLINATIONS_URL + '/' + encoded + params
+        logger.info(f'img2img URL: {len(url)} chars, negative: {len(negative)} chars')
         async with httpx.AsyncClient(timeout=GEN_TIMEOUT, follow_redirects=True) as client:
             resp = await client.get(url)
             if resp.status_code == 200 and len(resp.content) > 500:
                 logger.info('Pollinations img2img: ' + str(len(resp.content)) + ' bytes')
                 return resp.content
             else:
-                logger.warning('Pollinations img2img failed: HTTP ' + str(resp.status_code))
-    except httpx.TimeoutException:
-        logger.error('Pollinations img2img timeout')
+                logger.warning('Pollinations img2img failed: HTTP ' + str(resp.status_code) + ', body: ' + str(len(resp.content)) + ' bytes')
     except Exception as e:
         logger.error('Pollinations img2img error: ' + str(e))
     return None
