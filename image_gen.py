@@ -1,14 +1,13 @@
-﻿# Image generation via Pollinations.ai img2img
+# Image generation - Multi-provider: Hugging Face (primary) or Pollinations (fallback)
 # Reference images scraped from per-role folder/page URLs (Telegraph, ImgBB, etc.)
-import os, re, time, random, urllib.request, urllib.parse, httpx
-from pathlib import Path
+import os, re, time, random, base64, urllib.request, urllib.parse, httpx
 from config import config
 from utils.logger import logger
 
-POLLINATIONS_URL = 'https://image.pollinations.ai/prompt/flux'
-GEN_TIMEOUT = 60
+POLLINATIONS_URL = 'https://image.pollinations.ai/prompt'
+GEN_TIMEOUT = 90
 
-# ── Negative prompt: fix bad hands, anatomy, quality ──
+# ── Negative prompt ──
 NEGATIVE_PROMPT = (
     'bad hands, ugly hands, missing fingers, extra fingers, fused fingers, '
     'poorly drawn hands, deformed hands, mutated hands, disfigured fingers, '
@@ -32,8 +31,12 @@ ROLE_NEGATIVES = {
     'xiaolu': 'nsfw, nude, revealing, skimpy, lingerie, bikini, muscular, tall',
 }
 
+# ── Hugging Face config (free tier, ~30s cold start) ──
+# Get free token at https://huggingface.co/settings/tokens
+HF_TOKEN = os.getenv('HF_TOKEN', '')
+HF_IMG2IMG_MODEL = os.getenv('HF_IMG2IMG_MODEL', 'stabilityai/stable-diffusion-xl-base-1.0')
+
 # ── Per-role reference image folders ──
-# Override via env: IMAGE_REF_FOLDERS_<ROLE>=url1,url2
 ROLE_REF_FOLDERS = {
     'xiaolu': ['https://telegra.ph/miko3%E5%A4%8D%E6%B4%BB%E7%89%88-06-27'],
 }
@@ -47,10 +50,9 @@ def _get_role_ref_folders(role_id):
 
 # Cache: {page_url: (timestamp, [image_urls])}
 _ref_cache = {}
-_CACHE_TTL = 600  # 10 min
+_CACHE_TTL = 600
 
 def _scrape_images_from_page(page_url: str) -> list[str]:
-    """Fetch a Telegraph/page URL and extract all image URLs."""
     now = time.time()
     if page_url in _ref_cache:
         ts, urls = _ref_cache[page_url]
@@ -61,14 +63,12 @@ def _scrape_images_from_page(page_url: str) -> list[str]:
         client = httpx.Client(timeout=15, follow_redirects=True)
         resp = client.get(page_url, headers={'User-Agent': 'Bot/1.0'})
         if resp.status_code != 200:
-            logger.warning(f'Scrape {page_url}: HTTP {resp.status_code}')
             return []
         html = resp.text
-    except Exception as e:
-        logger.warning(f'Scrape {page_url} failed: {e}')
+    except Exception:
         return []
 
-    img_urls = re.findall(r'<img[^>]+src=["\x27]([^"\x27]+)["\x27]', html, re.IGNORECASE)
+    img_urls = re.findall(r'<img[^>]+src=[\"\x27]([^\"\x27]+)[\"\x27]', html, re.IGNORECASE)
     if not img_urls:
         img_urls = re.findall(r'!\[.*?\]\(([^)]+)\)', html)
 
@@ -85,7 +85,6 @@ def _scrape_images_from_page(page_url: str) -> list[str]:
             continue
         elif not u.startswith('http'):
             u = urllib.parse.urljoin(page_url, u)
-
         low = u.lower().split('?')[0]
         if any(low.endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp')):
             resolved.append(u)
@@ -97,21 +96,16 @@ def _scrape_images_from_page(page_url: str) -> list[str]:
     return resolved
 
 def _get_random_ref_url(role_id='') -> str | None:
-    """Pick a random image URL from the role's folder(s). Falls back to all folders."""
     folders = _get_role_ref_folders(role_id)
     all_images = []
     for url in folders:
         all_images.extend(_scrape_images_from_page(url))
-
     if not all_images:
-        # fallback: try all known folders
         for urls in ROLE_REF_FOLDERS.values():
             for url in urls:
                 all_images.extend(_scrape_images_from_page(url))
         if not all_images:
-            logger.warning(f'No reference images for {role_id}')
             return None
-
     return random.choice(all_images)
 
 def _get_character_desc(role_name):
@@ -123,9 +117,7 @@ def _get_character_desc(role_name):
 def _get_negative_prompt(role_id=''):
     base = NEGATIVE_PROMPT
     extra = ROLE_NEGATIVES.get(role_id, '')
-    if extra:
-        return base + ', ' + extra
-    return base
+    return base + ', ' + extra if extra else base
 
 def _build_visual_prompt(text, role_id=''):
     role_name = ''
@@ -145,20 +137,86 @@ async def generate_image(prompt, role_id=''):
     negative = _get_negative_prompt(role_id)
     logger.info(f'Image gen requested for {role_id}, prompt: {prompt[:80]}...')
 
+    ref_url = _get_random_ref_url(role_id)
+    if not ref_url:
+        logger.warning(f'No reference image available for {role_id}')
+        return None
+
     try:
-        ref_url = _get_random_ref_url(role_id)
-        if not ref_url:
-            logger.warning(f'No reference image available for {role_id}')
-            return None
-        logger.info(f'img2img with ref: {ref_url[:80]}...')
+        # 1) Try Hugging Face img2img (free, better quality)
+        if HF_TOKEN:
+            logger.info(f'Trying HF img2img for {role_id}')
+            result = await _hf_img2img(visual_prompt, ref_url, negative)
+            if result:
+                logger.info(f'HF img2img success: {len(result)} bytes')
+                return result
+            logger.warning('HF img2img failed, falling back to Pollinations')
+
+        # 2) Fallback: Pollinations
+        logger.info(f'img2img with Pollinations, ref: {ref_url[:80]}...')
         result = await _pollinations_img2img(visual_prompt, ref_url, negative)
         if result:
-            logger.info(f'img2img success: {len(result)} bytes')
+            logger.info(f'Pollinations img2img success: {len(result)} bytes')
             return result
-        logger.warning(f'img2img returned no result for {role_id}')
+        logger.warning(f'Pollinations img2img returned no result for {role_id}')
     except Exception as e:
         logger.error(f'img2img exception: {e}')
     return None
+
+# ── Hugging Face Serverless Inference (free tier) ──
+
+async def _hf_img2img(prompt: str, ref_url: str, negative: str) -> bytes | None:
+    """Hugging Face img2img via Serverless Inference API (free, ~30s cold start)."""
+    try:
+        # Download reference image
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as dl:
+            ref_resp = await dl.get(ref_url, headers={'User-Agent': 'Bot/1.0'})
+            if ref_resp.status_code != 200 or len(ref_resp.content) < 500:
+                logger.warning(f'HF: cannot download ref from {ref_url[:60]}')
+                return None
+            ref_bytes = ref_resp.content
+            ref_b64 = base64.b64encode(ref_bytes).decode('utf-8')
+
+        api_url = f'https://api-inference.huggingface.co/models/{HF_IMG2IMG_MODEL}'
+        payload = {
+            'inputs': prompt,
+            'parameters': {
+                'negative_prompt': negative,
+                'image': ref_b64,
+                'strength': 0.35,  # lower = closer to reference
+                'guidance_scale': 7.5,
+                'num_inference_steps': 30,
+            }
+        }
+
+        async with httpx.AsyncClient(timeout=GEN_TIMEOUT, follow_redirects=True) as client:
+            resp = await client.post(
+                api_url,
+                json=payload,
+                headers={
+                    'Authorization': f'Bearer {HF_TOKEN}',
+                    'Content-Type': 'application/json',
+                },
+            )
+
+            if resp.status_code == 200 and len(resp.content) > 500:
+                content_type = resp.headers.get('content-type', '')
+                if 'image' in content_type or resp.content[:4].hex() in ('89504e47', 'ffd8ffe0', '52494646', 'ffd8ffe1'):
+                    logger.info(f'HF img2img: {len(resp.content)} bytes, model={HF_IMG2IMG_MODEL}')
+                    return resp.content
+                else:
+                    logger.warning(f'HF returned non-image: {content_type}, body={resp.text[:200]}')
+            elif resp.status_code == 503:
+                logger.info('HF model loading (cold start), will retry next time')
+            else:
+                logger.warning(f'HF img2img HTTP {resp.status_code}: {resp.text[:200]}')
+    except httpx.TimeoutException:
+        logger.error('HF img2img timeout')
+    except Exception as e:
+        logger.error(f'HF img2img error: {type(e).__name__}: {e}')
+    return None
+
+# ── Pollinations (free fallback) ──
 
 async def _pollinations_img2img(prompt, ref_url, negative=''):
     try:
@@ -171,16 +229,13 @@ async def _pollinations_img2img(prompt, ref_url, negative=''):
         if negative:
             params += '&negative=' + urllib.parse.quote(negative, safe='')
         url = POLLINATIONS_URL + '/' + encoded + params
-        logger.info(f'img2img URL: {len(url)} chars, negative: {len(negative)} chars')
-        async with httpx.AsyncClient(timeout=GEN_TIMEOUT, follow_redirects=True) as client:
+        logger.info(f'Pollinations URL: {len(url)} chars')
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
             resp = await client.get(url)
             if resp.status_code == 200 and len(resp.content) > 500:
-                logger.info('Pollinations img2img: ' + str(len(resp.content)) + ' bytes')
                 return resp.content
-            else:
-                logger.warning('Pollinations img2img failed: HTTP ' + str(resp.status_code) + ', body: ' + str(len(resp.content)) + ' bytes')
     except Exception as e:
-        logger.error('Pollinations img2img error: ' + str(e))
+        logger.error(f'Pollinations error: {e}')
     return None
 
 def _extract_visual_prompt(reply_text, role_name=''):
