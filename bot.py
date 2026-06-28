@@ -19,6 +19,7 @@ from deep_dream import summarize_user_conversation
 from roles import ROLES, get_role
 from database import db  # noqa: F401
 from db_sync import download_db, upload_db, sync_loop
+from db_sync import download_db, upload_db, sync_loop
 from utils.logger import logger
 from utils.rate_limit import check_rate_limit
 from handlers.commands import cmd_start, cmd_checkin, cmd_redeem, cmd_gencode

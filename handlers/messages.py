@@ -589,12 +589,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if config.IMAGE_GEN_ENABLED and clean_reply:
         required_tier = get_max_tier_for_text(role_id, clean_reply)
         if unlock_tier >= required_tier:
-            try:
-                img_data = await generate_image(clean_reply, role.get("name", ""))
-                if img_data and len(img_data) > 500:
-                    await update.message.reply_photo(img_data)
-            except Exception as e:
-                logger.error(f"Image gen error: {e}")
+            # Only generate if AI is explicitly offering/showing photos
+            visual_intent = ["要看吗", "想看吗", "给你看", "发你看",
+                           "给你拍", "照片", "自拍", "写真", "拍一张",
+                           "穿了", "换了", "超好看"]
+            if any(kw in clean_reply for kw in visual_intent):
+                try:
+                    img_data = await generate_image(clean_reply, role.get("name", ""))
+                    if img_data and len(img_data) > 500:
+                        await update.message.reply_photo(img_data)
+                except Exception as e:
+                    logger.error(f"Image gen error: {e}")
 
     if clean_reply:
         if not voice_sent:
