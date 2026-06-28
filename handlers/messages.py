@@ -586,40 +586,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     # -- Smart photo flow: background pre-generation + conversational delivery --
-    _pending_gen = context.bot_data.setdefault("_pending_photo", {})
-    
-    # Check if user is confirming a pending photo offer
-    if user_id in _pending_gen:
-        affirm_kw = ["好", "要", "看", "发", "可以", "行", "来", "yes", "ok", "嗯", "快", "show"]
-        if any(kw in user_text for kw in affirm_kw):
-            pending = _pending_gen.pop(user_id)
+    try:
+        _pending_gen = context.bot_data.setdefault("_pending_photo", {})
+        
+        # Check if user is confirming a pending photo offer
+        if user_id in _pending_gen:
+            affirm_kw = ["好", "要", "看", "发", "可以", "行", "来", "yes", "ok", "嗯", "快", "show"]
+            if any(kw in user_text for kw in affirm_kw):
+                pending = _pending_gen.pop(user_id)
+                try:
+                    await update.message.reply_text(random.choice([
+                        "稍等哦～我找找啊... 🔍",
+                        "等一下下～翻箱倒柜中... 👗",
+                        "嘿嘿，让我找找最好看的那张... ✨",
+                    ]))
+                    await update.message.reply_photo(pending)
+                except Exception as e:
+                    logger.error(f"Failed to send pending photo: {e}")
+            else:
+                _pending_gen.pop(user_id, None)
+        
+        # Keyword-based image matching (local media)
+        media_path = _pick_media_by_context(role_id, full_reply)
+        if media_path:
             try:
-                await update.message.reply_text(random.choice([
-                    "稍等哦～我找找啊... 🔍",
-                    "等一下下～翻箱倒柜中... 👗",
-                    "嘿嘿，让我找找最好看的那张... ✨",
-                ]))
-                await update.message.reply_photo(pending)
-            except Exception as e:
-                logger.error(f"Failed to send pending photo: {e}")
-        else:
-            _pending_gen.pop(user_id, None)
-    
-    # Keyword-based image matching (local media)
-    media_path = _pick_media_by_context(role_id, full_reply)
-    if media_path:
-        try:
-            with open(media_path, "rb") as f:
-                await update.message.reply_photo(f.read())
-        except Exception:
-            pass
-    
-    # Background pre-generation: if AI reply hints at offering photos
-    if clean_reply:
-        role_name = role.get("name", "")
-        offer_kw = ["要看吗", "想看吗", "给你看", "发你看", "给你拍", "照片", "自拍", "写真"]
-        if any(kw in clean_reply for kw in offer_kw):
-            asyncio.create_task(_pregenerate_photo(update, user_id, clean_reply, role_id, role_name, _pending_gen))
+                with open(media_path, "rb") as f:
+                    await update.message.reply_photo(f.read())
+            except Exception:
+                pass
+        
+        # Background pre-generation: if AI reply hints at offering photos
+        if clean_reply:
+            role_name = role.get("name", "")
+            offer_kw = ["要看吗", "想看吗", "给你看", "发你看", "给你拍", "照片", "自拍", "写真"]
+            if any(kw in clean_reply for kw in offer_kw):
+                asyncio.create_task(_pregenerate_photo(update, user_id, clean_reply, role_id, role_name, _pending_gen))
+
+    except Exception as e:
+        logger.error(f"Photo flow error: {e}")
 
     db.update_chat_history(user_id, history)
 
@@ -676,7 +680,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error: {context.error}", exc_info=True)
     if update and isinstance(update, Update) and update.effective_message:
         try:
-            await update.effective_message.reply_text("❌ 出了点小问题，请稍后再试哦~")
+            role_id = "xiaolu"
+            try:
+                if hasattr(context, "bot_data"):
+                    role_id = context.bot_data.get("role_id", "xiaolu")
+            except Exception:
+                pass
+            await update.effective_message.reply_text(_get_role_busy_message(role_id))
         except Exception:
             pass
 
