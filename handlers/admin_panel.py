@@ -64,7 +64,7 @@ async def admin_recent(query, context):
     lines = ['📋 **最近用户**\n']
     for u in us:
         n = ROLES.get(u["current_role"],{}).get("name",u["current_role"])
-        lines.append(f"`{u["user_id"]}` | {n} | {u["total_messages"]}msgs")
+        lines.append("`{uid}` | {n} | {msgs}msgs".format(uid=u["user_id"], n=n, msgs=u["total_messages"]))
     kb = InlineKeyboardMarkup([[_bk("admin:users")]])
     await query.edit_message_text(chr(10).join(lines), reply_markup=kb, parse_mode="Markdown")
 
@@ -72,7 +72,7 @@ async def admin_viplist(query, context):
     vs = db.conn.execute("SELECT user_id,vip_tier,interests FROM user_profiles WHERE vip_tier>0 ORDER BY vip_tier DESC").fetchall()
     lines = ['💎 **VIP 用户**\n']
     for v in vs:
-        lines.append(f"`{v["user_id"]}` tier={v["vip_tier"]} {v["interests"] or ""}")
+        lines.append("`{uid}` tier={tier} {interest}".format(uid=v["user_id"], tier=v["vip_tier"], interest=v["interests"] or ""))
     if not vs:
         lines.append('暂无VIP用户')
     kb = InlineKeyboardMarkup([[_bk("admin:users")]])
