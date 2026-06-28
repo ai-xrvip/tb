@@ -105,42 +105,36 @@ def _build_visual_prompt(text: str, role_id: str = "") -> str:
 
 
 async def generate_image(prompt: str, role_id: str = "") -> bytes | None:
-    """Generate image from text using Pollinations.ai img2img."""
+    """Generate image using Pollinations.ai (img2img with ref, fallback to txt2img)."""
     if not config.IMAGE_GEN_ENABLED:
+        logger.debug("Image gen disabled by config")
         return None
 
-    # Look up role name from role_id
-    role_name = ""
-    if role_id:
-        from roles import ROLES
-        role = ROLES.get(role_id, {})
-        role_name = role.get("name", "")
-
     visual_prompt = _build_visual_prompt(prompt, role_id)
+    logger.info(f"Image gen requested for {role_id}, prompt: {prompt[:80]}...")
 
-    # Try with reference photo first (img2img)
-    ref_b64 = _get_reference_b64(role_id)
-    if ref_b64:
-        logger.info(f"img2img with reference ({len(ref_b64)} chars base64)")
-        result = await _pollinations_img2img(visual_prompt, ref_b64)
+    # Try Pollinations txt2img (most reliable, no CDN needed)
+    try:
+        result = await _pollinations_txt2img(visual_prompt)
         if result:
-            logger.info(f"img2img success: {len(result)} bytes")
+            logger.info(f"txt2img success: {len(result)} bytes")
             return result
-        logger.warning("img2img failed, falling back to txt2img")
-    else:
-        logger.info("No reference photo available, using txt2img")
+    except Exception as e:
+        logger.error(f"txt2img exception: {e}")
 
-    # Fallback: text-to-image without reference
-    result = await _pollinations_txt2img(visual_prompt)
-    if result:
-        return result
+    # Try img2img with reference if txt2img failed
+    try:
+        ref_b64 = _get_reference_b64(role_id)
+        if ref_b64:
+            logger.info(f"Trying img2img with reference ({len(ref_b64)} chars)")
+            result = await _pollinations_img2img(visual_prompt, ref_b64)
+            if result:
+                logger.info(f"img2img success: {len(result)} bytes")
+                return result
+    except Exception as e:
+        logger.error(f"img2img exception: {e}")
 
-    # Last resort: OpenAI API if configured
-    if config.IMAGE_GEN_API_KEY:
-        result = await _openai_gen(visual_prompt)
-        if result:
-            return result
-
+    logger.warning(f"All image gen methods failed for {role_id}")
     return None
 
 

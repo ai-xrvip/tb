@@ -13,7 +13,7 @@ from utils.logger import logger
 
 # Azure neural voices
 VOICE_MAP = {
-    "cute": "zh-CN-XiaochenNeural",
+    "cute": "zh-CN-XiaoyiNeural",
     "mature": "zh-CN-XiaohanNeural",
     "tsundere": "zh-CN-XiaomoNeural",
     "gentle": "zh-CN-XiaoyiNeural",
@@ -73,13 +73,17 @@ def _has_kao_char(s: str) -> bool:
 
 
 def _clean_tts_text(text: str) -> str:
-    """Strip emoji and kaomoji for natural-sounding speech."""
-    # Remove [media:xxx] tags
+    """Strip emoji, kaomoji, action brackets, and mood particles."""
+    # Remove all bracket content: [media:xxx], [??], [?], etc.
     text = re.sub(r'\[.*?\]', '', text)
     # Remove emoji
     text = ''.join(c for c in text if not _is_emoji(ord(c)))
-    # Remove kaomoji (short parenthetical expressions with known kaomoji chars)
+    # Remove kaomoji
     text = _KAOMOJI_RE.sub(lambda m: '' if _has_kao_char(m.group()) else m.group(), text)
+    # Remove standalone mood particles at end of sentences (before punctuation)
+    # ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? ? not stripped (they have meaning)
+    # Strip trailing ? (wave dash used as decorative)
+    text = text.replace('\uff5e', '').replace('~', '')
     # Collapse spaces
     text = re.sub(r' +', ' ', text).strip()
     # Strip decorative edge chars
