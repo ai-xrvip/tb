@@ -412,3 +412,13 @@ def get_tier(role_id: str, tag: str) -> int:
     if cfg:
         return cfg["tier"]
     return 0  # 默认免费
+
+def get_max_tier_for_text(role_id, text):
+    """Check AI reply text against all tags, return highest tier required."""
+    all_tags = get_tags_for_role(role_id)
+    max_tier = 0
+    for tag, cfg in all_tags.items():
+        if tag in text and cfg.get("tier", 0) > max_tier:
+            max_tier = cfg["tier"]
+    return max_tier
+

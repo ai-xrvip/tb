@@ -31,7 +31,7 @@ from handlers.payment import send_paywall_card
 from handlers.yuanwei import try_trigger_yuanwei
 from handlers.keepsake import try_trigger_keepsake
 from roles import get_current_paywall, get_paywall
-from media_tags import get_media_config, get_folder, get_tier, get_tags_for_role
+from media_tags import get_media_config, get_folder, get_tier, get_tags_for_role, get_max_tier_for_text
 from providers import get_provider, ProviderType
 from providers.base import ProviderError, RateLimitError, TokenLimitError
 from prompt_template import resolve_system_prompt
@@ -571,7 +571,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as tts_err:
             logger.error(f"TTS failed for {role_id}: {tts_err}")
 
-    # -- Image generation: API first, then text --
+    # -- Image generation: check tier, API first, then text --
+    if config.IMAGE_GEN_ENABLED and clean_reply:
+        required_tier = get_max_tier_for_text(role_id, clean_reply)
+        if unlock_tier >= required_tier:
+            try:
+                img_data = await generate_image(clean_reply, role.get("name", ""))
+                if img_data and len(img_data) > 500:
+                    await update.message.reply_photo(img_data)
+            except Exception as e:
+                logger.error(f"Image gen error: {e}")
     if config.IMAGE_GEN_ENABLED and clean_reply:
         try:
             img_data = await generate_image(clean_reply, role.get("name", ""))
