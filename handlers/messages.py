@@ -34,9 +34,18 @@ from roles import get_current_paywall, get_paywall
 from media_tags import get_media_config, get_folder, get_tier, get_tags_for_role, get_max_tier_for_text
 from providers import get_provider, ProviderType
 from providers.base import ProviderError, RateLimitError, TokenLimitError
+from relationship import get_mood_prompt, get_mood_for_user
+from environment import get_environment_context
+from knowledge import get_knowledge_context
 from prompt_template import resolve_system_prompt
-from providers.tts import generate_role_voice
-from image_gen import generate_image
+try:
+    from providers.tts import generate_role_voice
+except Exception:
+    generate_role_voice = None
+try:
+    from image_gen import generate_image
+except Exception:
+    generate_image = None
 
 
 # ── 角色化等待/报错话术 ──
@@ -584,7 +593,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ?? TTS voice (check first, skip text if voice sent) ??
     voice_sent = False
-    if config.TTS_ENABLED and clean_reply:
+    if config.TTS_ENABLED and clean_reply and generate_role_voice:
         try:
             voice_data = await generate_role_voice(
                 clean_reply, role_id, role,
@@ -597,7 +606,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"TTS failed for {role_id}: {tts_err}")
 
     # -- Image generation: check tier, API first, then text --
-    if config.IMAGE_GEN_ENABLED and clean_reply:
+    if config.IMAGE_GEN_ENABLED and clean_reply and generate_image:
         required_tier = get_max_tier_for_text(role_id, clean_reply)
         if unlock_tier >= required_tier:
             # Only generate if AI is explicitly offering/showing photos

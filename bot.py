@@ -18,6 +18,7 @@ from config import config
 from deep_dream import summarize_user_conversation
 from roles import ROLES, get_role
 from database import db  # noqa: F401
+from utils.logger import logger
 try:
     from db_sync import download_db, upload_db, sync_loop
     _db_sync_ok = True
@@ -27,8 +28,6 @@ except Exception:
     download_db = lambda x: False
     upload_db = lambda x: False
     sync_loop = lambda x, y: None
-from db_sync import download_db, upload_db, sync_loop
-from utils.logger import logger
 from utils.rate_limit import check_rate_limit
 from handlers.commands import cmd_start, cmd_checkin, cmd_redeem, cmd_gencode
 from handlers.pay import cmd_gift_status, gift_callback
