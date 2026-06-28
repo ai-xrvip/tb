@@ -659,6 +659,32 @@ class Database:
         )
         self.conn.commit()
 
+    def cleanup_inactive_users(self, days: int = 180) -> int:
+        """Delete records of users inactive for more than N days. Returns count."""
+        import time
+        cutoff = time.time() - (days * 86400)
+        rows = self.conn.execute(
+            "SELECT user_id FROM user_last_message WHERE last_message_at < ?", (cutoff,)
+        ).fetchall()
+        count = 0
+        for row in rows:
+            uid = row["user_id"]
+            # Skip VIP users
+            vip = self.conn.execute(
+                "SELECT vip_tier FROM user_profiles WHERE user_id = ?", (uid,)
+            ).fetchone()
+            if vip and vip["vip_tier"] > 0:
+                continue
+            self.conn.execute("DELETE FROM users WHERE user_id = ?", (uid,))
+            self.conn.execute("DELETE FROM chat_history WHERE user_id = ?", (uid,))
+            self.conn.execute("DELETE FROM user_profiles WHERE user_id = ?", (uid,))
+            self.conn.execute("DELETE FROM user_last_message WHERE user_id = ?", (uid,))
+            count += 1
+        self.conn.commit()
+        if count:
+            logger.info(f"Cleanup: removed {count} inactive users (> {days} days, non-VIP)")
+        return count
+
     def backup_database(self) -> str | None:
         """Backup database to backups/ directory, returns path or None"""
         import shutil as _shutil

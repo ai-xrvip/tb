@@ -291,6 +291,14 @@ def build_single_bot(role_id: str, token: str) -> Application:
         name=f"moments_{role_id}",
     )
 
+    # -- Inactive user cleanup: daily --
+    app.job_queue.run_repeating(
+        lambda ctx: db.cleanup_inactive_users(180),
+        interval=86400,
+        first=3600,
+        name="user_cleanup",
+    )
+
     # ── DB Backup: every hour ──
     app.job_queue.run_repeating(
         lambda ctx: upload_db(config.DB_PATH),
