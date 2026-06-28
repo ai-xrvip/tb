@@ -18,7 +18,15 @@ from config import config
 from deep_dream import summarize_user_conversation
 from roles import ROLES, get_role
 from database import db  # noqa: F401
-from db_sync import download_db, upload_db, sync_loop
+try:
+    from db_sync import download_db, upload_db, sync_loop
+    _db_sync_ok = True
+except Exception:
+    logger.warning("db_sync not available, DB persistence disabled")
+    _db_sync_ok = False
+    download_db = lambda x: False
+    upload_db = lambda x: False
+    sync_loop = lambda x, y: None
 from db_sync import download_db, upload_db, sync_loop
 from utils.logger import logger
 from utils.rate_limit import check_rate_limit
@@ -454,7 +462,7 @@ async def main():
 
             logger.info("DB Sync: Local DB missing/empty, downloading from GitHub...")
 
-            download_db(db_path)
+            if _db_sync_ok: download_db(db_path)
 
     except Exception as e:
 
@@ -464,7 +472,7 @@ async def main():
 
     # ── DB Sync: background upload loop (every 30 min) ──
 
-    asyncio.create_task(sync_loop(config.DB_PATH, 1800))
+    if _db_sync_ok: asyncio.create_task(sync_loop(config.DB_PATH, 1800))
 
     logger.info(f"DB Sync: Auto-backup to GitHub every 30 min, path={config.DB_PATH}")
 
