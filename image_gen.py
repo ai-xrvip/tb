@@ -7,7 +7,7 @@ from utils.logger import logger
 POLLINATIONS_URL = 'https://image.pollinations.ai/prompt'
 GEN_TIMEOUT = 90
 
-# ── Negative prompt ──
+# 閳光偓閳光偓 Negative prompt 閳光偓閳光偓
 NEGATIVE_PROMPT = (
     'bad hands, ugly hands, missing fingers, extra fingers, fused fingers, '
     'poorly drawn hands, deformed hands, mutated hands, disfigured fingers, '
@@ -31,12 +31,12 @@ ROLE_NEGATIVES = {
     'xiaolu': 'nsfw, nude, revealing, skimpy, lingerie, bikini, muscular, tall',
 }
 
-# ── Hugging Face config (free tier, ~30s cold start) ──
+# 閳光偓閳光偓 Hugging Face config (free tier, ~30s cold start) 閳光偓閳光偓
 # Get free token at https://huggingface.co/settings/tokens
 HF_TOKEN = os.getenv('HF_TOKEN', '')
 HF_IMG2IMG_MODEL = os.getenv('HF_IMG2IMG_MODEL', 'stabilityai/stable-diffusion-xl-base-1.0')
 
-# ── Per-role reference image folders ──
+# 閳光偓閳光偓 Per-role reference image folders 閳光偓閳光偓
 ROLE_REF_FOLDERS = {
     'xiaolu': ['https://telegra.ph/miko3%E5%A4%8D%E6%B4%BB%E7%89%88-06-27'],
 }
@@ -119,6 +119,26 @@ def _get_negative_prompt(role_id=''):
     extra = ROLE_NEGATIVES.get(role_id, '')
     return base + ', ' + extra if extra else base
 
+
+# Random composition to avoid repetitive headshots
+_COMPOSITIONS = [
+    'full body shot, standing pose, dynamic posture, detailed outfit, wide angle lens, environmental background, city street',
+    'medium shot, waist up, natural pose, soft smile, bokeh background, outdoor cafe',
+    'three-quarter body, sitting pose, casual elegance, indoor natural light, cozy room',
+    'full body, walking pose, candid moment, street photography, urban background, motion blur',
+    'medium full shot, leaning pose, fashion editorial, dramatic lighting, architectural background',
+    'wide shot, playful pose, outdoor park, golden hour sunlight, full outfit visible',
+    'half body, over shoulder glance, moody atmosphere, window light, intimate framing',
+    'full body, dynamic action pose, hair flowing, wind effect, nature background, scenic view',
+    'kneeling pose, close-medium shot, soft focus background, delicate expression, detailed clothing',
+    'full body portrait, confident stance, studio lighting, clean background, fashion catalog style',
+    'three-quarter shot, relaxed sitting, reading or drinking, lifestyle photography, home interior',
+    'wide environmental portrait, small figure in frame, atmospheric, storytelling composition',
+]
+
+def _get_composition():
+    return random.choice(_COMPOSITIONS)
+
 def _build_visual_prompt(text, role_id=''):
     role_name = ''
     if role_id:
@@ -128,7 +148,7 @@ def _build_visual_prompt(text, role_id=''):
     char_desc = _get_character_desc(role_name)
     text = text.strip()[:300]
     quality = 'high quality, photorealistic, soft natural lighting, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece'
-    return char_desc + ', ' + quality + ' -- same person as reference photo, identical face, identical features, cosplay photography -- scene: ' + text
+    return char_desc + ', ' + quality + ' -- same person as reference photo, identical face, identical features, cosplay photography, ' + _get_composition() + ' -- scene: ' + text
 
 async def generate_image(prompt, role_id=''):
     if not config.IMAGE_GEN_ENABLED:
@@ -163,7 +183,7 @@ async def generate_image(prompt, role_id=''):
         logger.error(f'img2img exception: {e}')
     return None
 
-# ── Hugging Face Serverless Inference (free tier) ──
+# 閳光偓閳光偓 Hugging Face Serverless Inference (free tier) 閳光偓閳光偓
 
 async def _hf_img2img(prompt: str, ref_url: str, negative: str) -> bytes | None:
     """Hugging Face img2img via Serverless Inference API (free, ~30s cold start)."""
@@ -216,7 +236,7 @@ async def _hf_img2img(prompt: str, ref_url: str, negative: str) -> bytes | None:
         logger.error(f'HF img2img error: {type(e).__name__}: {e}')
     return None
 
-# ── Pollinations (free fallback) ──
+# 閳光偓閳光偓 Pollinations (free fallback) 閳光偓閳光偓
 
 async def _pollinations_img2img(prompt, ref_url, negative=''):
     try:
