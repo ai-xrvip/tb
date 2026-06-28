@@ -291,6 +291,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
 
     # 合并多个 system prompt 以减少上下文占用
     extra_system_parts = []
+    messages = [{"role": "system", "content": system_prompt}]
 
     # 加载世界书/记忆（关键词匹配 + 永久记忆）
     try:
