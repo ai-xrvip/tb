@@ -625,18 +625,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Photo flow error: {e}")
 
-    db.update_chat_history(user_id, history)
-
-    db.increment_message_count(user_id)
-    new_total = (user_data.get("total_messages", 0) or 0) + 1
-
-    next_paywall = get_current_paywall(role_id, new_total, unlock_tier)
-    if next_paywall:
-        await send_paywall_card(update, user_id, role_id, new_total)
-
-    await try_trigger_yuanwei(update, user_id, role_id, new_total)
-    await try_trigger_keepsake(update, user_id, role_id, new_total)
-    await _check_and_summarize(user_id)
+    # -- Post-reply cleanup (wrapped to prevent error propagation) --
+    try:
+        db.update_chat_history(user_id, history)
+        db.increment_message_count(user_id)
+        new_total = (user_data.get("total_messages", 0) or 0) + 1
+        next_paywall = get_current_paywall(role_id, new_total, unlock_tier)
+        if next_paywall:
+            await send_paywall_card(update, user_id, role_id, new_total)
+        await try_trigger_yuanwei(update, user_id, role_id, new_total)
+        await try_trigger_keepsake(update, user_id, role_id, new_total)
+        await _check_and_summarize(user_id)
+    except Exception as e:
+        logger.error(f"Post-reply error: {e}")
 
 
 
