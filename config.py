@@ -54,8 +54,8 @@ class Config:
     # Image Generation (OpenAI-compatible)
     IMAGE_GEN_ENABLED: bool = os.getenv("IMAGE_GEN_ENABLED", "true").lower() == "true"
     IMAGE_GEN_API_KEY: str = os.getenv("IMAGE_GEN_API_KEY", "")
-    IMAGE_GEN_BASE_URL: str = os.getenv("IMAGE_GEN_BASE_URL", "https://api.openai.com/v1")
-    IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "gpt-image-2")
+    IMAGE_GEN_BASE_URL: str = os.getenv("IMAGE_GEN_BASE_URL", "https://apihub.agnes-ai.com/v1")
+    IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "agnes-image-2.1-flash")
     IMAGE_GEN_SIZE: str = os.getenv("IMAGE_GEN_SIZE", "1024x1024")
 
     # 鈹€鈹€ 鍔ㄦ€佸姞杞芥墍鏈?Bot Token 鈹€鈹€
