@@ -48,7 +48,7 @@ from handlers.moments import send_moment_broadcast, MOMENTS_INTERVAL_MIN, MOMENT
 from handlers.testimonial import cmd_screenshot, cmd_post_testimonial
 
 # ── Shared shutdown flag ──
-_shutdown_flag = False
+_shutdown_flag = threading.Event()
 
 
 def validate_config() -> list[str]:
@@ -218,7 +218,7 @@ def start_keepalive():
     if not config.ENABLE_KEEPALIVE:
         return
     def _ping():
-        while not _shutdown_flag:
+        while not _shutdown_flag.is_set():
             time.sleep(config.KEEPALIVE_INTERVAL)
             try:
                 port = os.environ.get("PORT", "8080")
@@ -439,7 +439,7 @@ async def announce_new_role(app, role_id: str) -> bool:
 
 # ── Main ──
 async def main():
-    global _shutdown_flag
+    global _shutdown_flag  # kept for compat
 
     # ── Config validation (non-fatal) ──
     errors = validate_config()
@@ -450,9 +450,9 @@ async def main():
     import signal as _signal
 
     def _handle_signal(signum, frame):
-        global _shutdown_flag
+        global _shutdown_flag  # kept for compat
         logger.info(f"Received signal {signum}, shutting down gracefully...")
-        _shutdown_flag = True
+        _shutdown_flag.set()
 
     _signal.signal(_signal.SIGTERM, _handle_signal)
     _signal.signal(_signal.SIGINT, _handle_signal)
@@ -481,7 +481,8 @@ async def main():
 
     # ── DB Sync: background upload loop (every 30 min) ──
 
-    if _db_sync_ok: asyncio.create_task(sync_loop(config.DB_PATH, 1800))
+    if _db_sync_ok:
+        _db_sync_task = asyncio.create_task(sync_loop(config.DB_PATH, 1800))
 
     logger.info(f"DB Sync: Auto-backup to GitHub every 30 min, path={config.DB_PATH}")
 
@@ -501,7 +502,8 @@ async def main():
     # ── Active bots ──
     active_bots = config.get_active_bots()
         # ── Auto VIP: owner always max tier ──
-    OWNER_ID = 5405770555
+    OWNER_ID = int(os.environ.get("OWNER_ID", "5405770555"))
+
     try:
         db.create_user(OWNER_ID)
         db.set_vip(OWNER_ID)
@@ -518,7 +520,7 @@ async def main():
     if not active_bots:
         logger.warning("No bot tokens configured — healthcheck only. Set *_BOT_TOKEN env vars in Railway.")
         # Keep the event loop alive so healthcheck server stays up
-        while not _shutdown_flag:
+        while not _shutdown_flag.is_set():
             await asyncio.sleep(60)
         return
 
@@ -554,7 +556,7 @@ async def main():
 
         logger.info(f"All {len(apps)} bots running via webhook")
 
-        while not _shutdown_flag:
+        while not _shutdown_flag.is_set():
             await asyncio.sleep(3600)
     else:
         # ── Polling mode ──
@@ -581,7 +583,7 @@ async def run_bot_polling(role_id: str, token: str, bot_index: int = 0, total_bo
     logger.info(f"Polling started: {role['name']} ({role_id})")
     await app.updater.start_polling(allowed_updates=["message", "callback_query"])
     # Keep alive
-    while not _shutdown_flag:
+    while not _shutdown_flag.is_set():
         await asyncio.sleep(60)
     await app.updater.stop()
     await app.stop()

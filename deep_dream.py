@@ -49,13 +49,15 @@ async def summarize_user_conversation(user_id: int, role_id: str):
         )
 
         if summary and len(summary) > 10:
+            import asyncio as _asyncio
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc).isoformat()
-            db.conn.execute(
+            await _asyncio.to_thread(
+                db.conn.execute,
                 "INSERT INTO chat_summaries (user_id, summary_text, msg_count, created_at) VALUES (?, ?, ?, ?)",
                 (user_id, summary, len(recent), now),
             )
-            db.conn.commit()
+            await _asyncio.to_thread(db.conn.commit)
             logger.info("Deep Dream summary for user=" + str(user_id) + ": " + summary[:100])
             return summary
 

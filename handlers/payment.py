@@ -7,7 +7,6 @@
 
 模式切换: .env 中 PAYMENT_MODE=test 或 production
 """
-import os
 import uuid
 import hashlib
 import time
@@ -22,13 +21,7 @@ from utils.logger import logger
 
 
 # ── 模式配置 ──
-PAYMENT_MODE = os.getenv("PAYMENT_MODE", "test")  # test / production
-
-# 易支付配置（production 模式时使用）
-EPAY_PID = os.getenv("EPAY_PID", "")
-EPAY_KEY = os.getenv("EPAY_KEY", "")
-EPAY_URL = os.getenv("EPAY_URL", "https://pay.example.com/submit.php")
-EPAY_NOTIFY_URL = os.getenv("EPAY_NOTIFY_URL", "")
+# Now using config.py as single source of truth for EPAY_* and PAYMENT_MODE
 
 
 def _generate_order_id() -> str:
@@ -110,7 +103,7 @@ async def send_paywall_card(update: Update, user_id: int, role_id: str, total_ms
         f"🎁 {item_name}\n"
         f"💰 ¥{price}"
     )
-    if PAYMENT_MODE == "test":
+    if config.PAYMENT_MODE == "test":
         caption += "\n🔬 测试模式：点击即送，免费解锁～"
 
     # 尝试发送图片卡片
@@ -166,7 +159,7 @@ async def handle_paywall_callback(update: Update, context: ContextTypes.DEFAULT_
     role = ROLES.get(role_id, {})
     role_name = role.get("name", role_id)
 
-    if PAYMENT_MODE == "test":
+    if config.PAYMENT_MODE == "test":
         # ── 测试模式：直接解锁 ──
         order_id = _generate_order_id()
         db.create_payment_order(order_id, user_id, role_id, pw["item_name"], pw["price"], tier)
@@ -206,17 +199,17 @@ async def handle_paywall_callback(update: Update, context: ContextTypes.DEFAULT_
         db.create_payment_order(order_id, user_id, role_id, pw["item_name"], pw["price"], tier)
 
         params = {
-            "pid": EPAY_PID,
+            "pid": config.EPAY_PID,
             "type": "alipay",
             "out_trade_no": order_id,
-            "notify_url": EPAY_NOTIFY_URL,
+            "notify_url": config.EPAY_NOTIFY_URL,
             "name": pw["item_name"],
             "money": str(pw["price"]),
         }
-        sign_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + EPAY_KEY
-        params["sign"] = hashlib.md5(sign_str.encode()).hexdigest()
-        params["sign_type"] = "MD5"
-        pay_url = f"{EPAY_URL}?{urlencode(params)}"
+        sign_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + config.EPAY_KEY
+        params["sign"] = hashlib.sha256(sign_str.encode()).hexdigest()
+        params["sign_type"] = "SHA256"
+        pay_url = f"{config.EPAY_URL}?{urlencode(params)}"
 
         new_text = (
             f"💝 {role_name} 期待你的心意～\n\n"

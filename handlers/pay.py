@@ -90,23 +90,24 @@ async def gift_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 生产模式：易支付
     import hashlib
     from urllib.parse import urlencode
-    from handlers.payment import _generate_order_id, EPAY_PID, EPAY_KEY, EPAY_URL, EPAY_NOTIFY_URL
+    from handlers.payment import _generate_order_id
+    from config import config as _cfg
 
     oid = _generate_order_id()
     db.create_payment_order(oid, user_id, "gift", gift_name, gift_price, 0)
 
     params = {
-        "pid": EPAY_PID,
+        "pid": _cfg.EPAY_PID,
         "type": "alipay",
         "out_trade_no": oid,
-        "notify_url": EPAY_NOTIFY_URL,
+        "notify_url": _cfg.EPAY_NOTIFY_URL,
         "name": gift_name,
         "money": str(gift_price),
     }
-    sign_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + EPAY_KEY
-    params["sign"] = hashlib.md5(sign_str.encode()).hexdigest()
-    params["sign_type"] = "MD5"
-    pay_url = f"{EPAY_URL}?{urlencode(params)}"
+    sign_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + _cfg.EPAY_KEY
+    params["sign"] = hashlib.sha256(sign_str.encode()).hexdigest()
+    params["sign_type"] = "SHA256"
+    pay_url = f"{_cfg.EPAY_URL}?{urlencode(params)}"
 
     await query.edit_message_text(
         f"\U0001f49d {gift_name}\n"

@@ -33,7 +33,7 @@ services:
       - ./media:/app/media
       - ./logs:/app/logs
       - ./backups:/app/backups
-      - bot_data:/app
+      - bot_data:/data
 
 volumes:
   bot_data:

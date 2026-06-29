@@ -17,9 +17,7 @@ console.setFormatter(logging.Formatter(
     datefmt="%Y-%m-%d %H:%M:%S",
 ))
 
-# Rotating file handler (10 MB, keep 3 backups)
-log_dir = Path(__file__).parent.parent / "logs"
-log_dir.mkdir(exist_ok=True)
+# Rotating file handler (10 MB, keep 3 backups) ? lazy init to avoid import-time I/O
 file_handler = RotatingFileHandler(
     log_dir / "bot.log",
     maxBytes=10 * 1024 * 1024,
@@ -33,5 +31,7 @@ file_handler.setFormatter(logging.Formatter(
 ))
 
 if not logger.handlers:
+    log_dir = Path(__file__).parent.parent / "logs"
+    log_dir.mkdir(exist_ok=True)
     logger.addHandler(console)
     logger.addHandler(file_handler)

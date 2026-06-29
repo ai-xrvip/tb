@@ -13,7 +13,7 @@ from pathlib import Path
 from utils.logger import logger
 
 GITHUB_API = "https://api.github.com"
-REPO = "ai-xrvip/tb"
+REPO = os.getenv("DB_SYNC_REPO", "ai-xrvip/tb")
 RELEASE_TAG = "db-backup"
 ASSET_NAME = "bot.db"
 
@@ -181,6 +181,6 @@ async def sync_loop(db_path, interval_sec=1800):
     while True:
         await asyncio.sleep(interval_sec)
         try:
-            upload_db(db_path)
+            await asyncio.to_thread(upload_db, db_path)
         except Exception as e:
             logger.error("DB Sync loop error: " + str(e))

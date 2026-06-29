@@ -1,6 +1,7 @@
 # Image generation - Agnes AI img2img (free tier, 4000 images/day)
 # Reference images scraped from per-role folder/page URLs
-import os, re, time, random, base64, json, httpx, urllib.request, urllib.parse
+import os, re, time, random, base64, json, urllib.request, urllib.parse
+import httpx
 from config import config
 from utils.logger import logger
 
@@ -43,18 +44,18 @@ def _get_role_ref_folders(role_id):
 _ref_cache = {}
 _CACHE_TTL = 600
 
-def _scrape_images_from_page(page_url: str) -> list[str]:
+async def _scrape_images_from_page(page_url: str) -> list[str]:
     now = time.time()
     if page_url in _ref_cache:
         ts, urls = _ref_cache[page_url]
         if now - ts < _CACHE_TTL and urls:
             return urls
     try:
-        client = httpx.Client(timeout=15, follow_redirects=True)
-        resp = client.get(page_url, headers={"User-Agent": "Bot/1.0"})
-        if resp.status_code != 200:
-            return []
-        html = resp.text
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(page_url, headers={"User-Agent": "Bot/1.0"})
+            if resp.status_code != 200:
+                return []
+            html = resp.text
     except Exception:
         return []
     img_urls = re.findall(r'<img[^>]+src=["\x27]([^"\x27]+)["\x27]', html, re.IGNORECASE)
@@ -76,15 +77,15 @@ def _scrape_images_from_page(page_url: str) -> list[str]:
     _ref_cache[page_url] = (now, resolved)
     return resolved
 
-def _get_random_ref_url(role_id="") -> str | None:
+async def _get_random_ref_url(role_id="") -> str | None:
     folders = _get_role_ref_folders(role_id)
     all_images = []
     for url in folders:
-        all_images.extend(_scrape_images_from_page(url))
+        all_images.extend(await _scrape_images_from_page(url))
     if not all_images:
         for urls in ROLE_REF_FOLDERS.values():
             for url in urls:
-                all_images.extend(_scrape_images_from_page(url))
+                all_images.extend(await _scrape_images_from_page(url))
         if not all_images:
             return None
     return random.choice(all_images)
@@ -134,7 +135,7 @@ async def generate_image(prompt, role_id=""):
     visual_prompt = _build_visual_prompt(prompt, role_id)
     logger.info(f"Image gen requested for {role_id}, prompt: {prompt[:80]}...")
 
-    ref_url = _get_random_ref_url(role_id)
+    ref_url = await _get_random_ref_url(role_id)
     if not ref_url:
         logger.warning(f"No reference image available for {role_id}")
         return None

@@ -82,7 +82,7 @@ def _get_role_busy_message(role_id: str) -> str:
 
 # ── 回复延迟系统（亲密度 + 时段感知）──
 
-def _calculate_reply_delay(user_id: int, role_id: str, reply_length: int, user_response_time: float = 999) -> float:
+def _calculate_reply_delay(user_id: int, role_id: str, reply_length: int, user_response_time: float = float("inf")) -> float:
     """模拟真人回复延迟：打字+思考+亲密度×时段繁忙度+忙线概率+对话节奏"""
     import random as _rng
 
