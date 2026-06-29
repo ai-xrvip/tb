@@ -50,7 +50,8 @@ class Database:
                     current_role   TEXT DEFAULT 'xiaolu',
                     free_count     INTEGER DEFAULT 20,
                     vip_expire     TEXT,
-                    total_messages INTEGER DEFAULT 0
+                    total_messages INTEGER DEFAULT 0,
+                    erotic_mode    INTEGER DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS blocked_users (
@@ -224,6 +225,12 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_daily_checkins_date ON daily_checkins(checkin_date);
             """)
             self.conn.commit()
+            # Migration: add erotic_mode column if missing
+            try:
+                c.execute("ALTER TABLE users ADD COLUMN erotic_mode INTEGER DEFAULT 0")
+            except Exception:
+                pass  # column already exists
+
             self.conn.commit()
             logger.info("All database tables initialized")
         except Exception as e:
@@ -305,6 +312,21 @@ class Database:
             "SELECT total_messages FROM users WHERE user_id = ?", (user_id,)
         ).fetchone()
         return row["total_messages"] if row else 0
+
+    def set_erotic_mode(self, user_id: int, enabled: bool = True):
+        """Enable/disable erotic mode for a user."""
+        val = 1 if enabled else 0
+        self.conn.execute(
+            "UPDATE users SET erotic_mode = ? WHERE user_id = ?", (val, user_id)
+        )
+        self.conn.commit()
+
+    def get_erotic_mode(self, user_id: int) -> bool:
+        """Check if user has erotic mode enabled."""
+        row = self.conn.execute(
+            "SELECT erotic_mode FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return bool(row and row["erotic_mode"])
 
     def get_code(self, code: str) -> Optional[dict]:
         row = self.conn.execute(
