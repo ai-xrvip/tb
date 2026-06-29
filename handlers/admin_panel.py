@@ -31,11 +31,11 @@ async def admin_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('🛡 **Admin Panel**\n\n欢迎回来，管理员', reply_markup=kb, parse_mode="Markdown")
 
 async def admin_dash(query, context):
-    t = db.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    td = db.conn.execute("SELECT COUNT(DISTINCT user_id) FROM chat_history WHERE updated_at > ?", (datetime.now(BJT).replace(hour=0,minute=0,second=0).isoformat(),)).fetchone()[0]
-    v = db.conn.execute("SELECT COUNT(*) FROM user_profiles WHERE vip_tier > 0").fetchone()[0]
-    m = db.conn.execute("SELECT SUM(total_messages) FROM users").fetchone()[0] or 0
-    rs = db.conn.execute("SELECT current_role, COUNT(*) FROM users WHERE total_messages>0 GROUP BY current_role ORDER BY COUNT(*) DESC LIMIT 10").fetchall()
+    t = db.get_total_user_count()
+    td = db.get_daily_active_users(datetime.now(BJT).replace(hour=0,minute=0,second=0).isoformat())
+    v = db.get_vip_user_count()
+    m = db.get_total_message_count()
+    rs = db.get_role_distribution()
     lines = ['📊 **Dashboard**\n',
         f"👥 总用户: {t}",
         f"💬 总消息: {m}",
@@ -60,7 +60,7 @@ async def admin_users(query, context):
     await query.edit_message_text('👥 **用户管理**\n\n请选择操作', reply_markup=kb, parse_mode="Markdown")
 
 async def admin_recent(query, context):
-    us = db.conn.execute("SELECT user_id,total_messages,current_role FROM users ORDER BY user_id DESC LIMIT 20").fetchall()
+    us = db.get_recent_users(20)
     lines = ['📋 **最近用户**\n']
     for u in us:
         n = ROLES.get(u["current_role"],{}).get("name",u["current_role"])
@@ -69,7 +69,7 @@ async def admin_recent(query, context):
     await query.edit_message_text(chr(10).join(lines), reply_markup=kb, parse_mode="Markdown")
 
 async def admin_viplist(query, context):
-    vs = db.conn.execute("SELECT user_id,vip_tier,interests FROM user_profiles WHERE vip_tier>0 ORDER BY vip_tier DESC").fetchall()
+    vs = db.get_vip_users()
     lines = ['💎 **VIP 用户**\n']
     for v in vs:
         lines.append("`{uid}` tier={tier} {interest}".format(uid=v["user_id"], tier=v["vip_tier"], interest=v["interests"] or ""))
@@ -79,7 +79,7 @@ async def admin_viplist(query, context):
     await query.edit_message_text(chr(10).join(lines), reply_markup=kb, parse_mode="Markdown")
 
 async def admin_bcast(query, context):
-    t = db.conn.execute("SELECT COUNT(*) FROM users WHERE total_messages>0").fetchone()[0]
+    t = db.get_active_user_count()
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"📢 发送全部({t})", callback_data="admin:sendall")],
         [_bk()],

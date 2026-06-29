@@ -316,6 +316,56 @@ class Database:
             ).fetchone()
             return row["total_messages"] if row else 0
 
+    def get_total_user_count(self) -> int:
+        """Get total registered users (thread-safe)."""
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+    def get_daily_active_users(self, since: str) -> int:
+        """Get count of users active since a given timestamp."""
+        with self.lock:
+            return self.conn.execute(
+                "SELECT COUNT(DISTINCT user_id) FROM chat_history WHERE updated_at > ?",
+                (since,),
+            ).fetchone()[0]
+
+    def get_vip_user_count(self) -> int:
+        with self.lock:
+            return self.conn.execute(
+                "SELECT COUNT(*) FROM user_profiles WHERE vip_tier > 0"
+            ).fetchone()[0]
+
+    def get_total_message_count(self) -> int:
+        with self.lock:
+            row = self.conn.execute("SELECT SUM(total_messages) FROM users").fetchone()
+            return row[0] if row and row[0] else 0
+
+    def get_role_distribution(self) -> list[dict]:
+        with self.lock:
+            return self.conn.execute(
+                "SELECT current_role, COUNT(*) FROM users WHERE total_messages>0 "
+                "GROUP BY current_role ORDER BY COUNT(*) DESC LIMIT 10"
+            ).fetchall()
+
+    def get_recent_users(self, limit: int = 20) -> list[dict]:
+        with self.lock:
+            return self.conn.execute(
+                "SELECT user_id,total_messages,current_role FROM users ORDER BY user_id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+    def get_vip_users(self) -> list[dict]:
+        with self.lock:
+            return self.conn.execute(
+                "SELECT user_id,vip_tier,interests FROM user_profiles WHERE vip_tier>0 ORDER BY vip_tier DESC"
+            ).fetchall()
+
+    def get_active_user_count(self) -> int:
+        with self.lock:
+            return self.conn.execute(
+                "SELECT COUNT(*) FROM users WHERE total_messages>0"
+            ).fetchone()[0]
+
     def get_total_messages(self, user_id: int) -> int:
         with self.lock:
             row = self.conn.execute(

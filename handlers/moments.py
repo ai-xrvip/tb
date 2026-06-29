@@ -24,9 +24,7 @@ async def _generate_moment_text(role_id, role, user_id):
     from prompt_template import resolve_system_prompt
     from providers.factory import get_provider_from_config
     try:
-        profile = db.conn.execute(
-            "SELECT interests, facts FROM user_profiles WHERE user_id = ?", (user_id,)
-        ).fetchone()
+        profile = db.get_profile(user_id)
         interests = profile["interests"] if profile else ""
     except Exception:
         interests = ""
@@ -87,10 +85,7 @@ async def send_moment_broadcast(context):
     role = ROLES.get(role_id, {})
     role_name = role.get("name", role_id)
     try:
-        users = db.conn.execute(
-            "SELECT DISTINCT user_id FROM users WHERE total_messages > 0 AND current_role = ?",
-            (role_id,)
-        ).fetchall()
+        users = db.get_active_users_for_role(role_id)
     except Exception as e:
         logger.error(f"Moment: failed to get users: {e}")
         return
@@ -99,8 +94,7 @@ async def send_moment_broadcast(context):
     import time
     now = time.time()
     user_ids = []
-    for u in users:
-        uid = u["user_id"]
+    for uid in users:
         try:
             last_msg = db.get_last_message_time(uid)
             if last_msg is None or (now - last_msg) < SILENCE_CUTOFF:

@@ -146,7 +146,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
     def _send_health_json(self):
         try:
             from database import db as _db
-            user_count = _db.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] if hasattr(_db, "conn") else 0
+            user_count = _db.get_total_user_count() if hasattr(_db, "get_total_user_count") else 0
         except Exception:
             user_count = 0
         self.send_response(200)
