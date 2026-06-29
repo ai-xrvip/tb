@@ -40,6 +40,28 @@ DEFAULT_MEDIA_TAGS = {
 # 继承全局标签，额外增加角色专属的分类
 # 如果标签名与全局重复，角色版会覆盖全局版（比如tier不同）
 
+# Role-specific tags (extend/override defaults per role)
+ROLE_MEDIA_TAGS: dict[str, dict] = {}
+
+def get_media_config(role_id: str, tag: str) -> dict | None:
+    """Look up tag config: role-specific first, then global default."""
+    role_tags = ROLE_MEDIA_TAGS.get(role_id, {})
+    if tag in role_tags:
+        return role_tags[tag]
+    return DEFAULT_MEDIA_TAGS.get(tag)
+
+def get_tags_for_role(role_id: str) -> dict:
+    """Return merged tags for a role: global defaults + role overrides."""
+    merged = dict(DEFAULT_MEDIA_TAGS)
+    role_tags = ROLE_MEDIA_TAGS.get(role_id, {})
+    merged.update(role_tags)
+    return merged
+
+def get_folder(role_id: str, tag: str) -> str | None:
+    """Get the folder name for a tag. Role-specific first, then default."""
+    cfg = get_media_config(role_id, tag)
+    return cfg["folder"] if cfg else None
+
 def get_tier(role_id: str, tag: str) -> int:
     """获取标签需要的解锁级别"""
     cfg = get_media_config(role_id, tag)
