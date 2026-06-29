@@ -44,6 +44,10 @@ try:
     from image_gen import generate_image
 except Exception:
     generate_image = None
+try:
+    from video_gen import generate_video
+except Exception:
+    generate_video = None
 
 
 # ── 角色化等待/报错话术 ──
@@ -383,6 +387,30 @@ async def _generate_and_send(update, reply_text, role_id, role_name):
         logger.error(f"img2img failed: {e}")
 
 
+async def _generate_and_send_video(update, reply_text, role_id, role_name):
+    """Generate and send a video. Shows status message during generation."""
+    status_msg = None
+    video_sent = False
+    try:
+        status_msg = await update.message.reply_text("🎬 ????????????1-2????")
+        video_data = await generate_video(reply_text, role_id)
+        if video_data and len(video_data) > 1000:
+            await status_msg.delete()
+            await update.message.reply_video(video_data)
+            video_sent = True
+        else:
+            await status_msg.edit_text("😢 ??????????????")
+    except Exception as e:
+        logger.error(f"Video gen failed: {e}")
+        try:
+            if status_msg:
+                await status_msg.edit_text("😢 ????????????????")
+            else:
+                await update.message.reply_text("😢 ????????????????")
+        except Exception:
+            pass
+    return video_sent
+
 async def _pregenerate_photo(update, user_id, reply_text, role_id, role_name, pending_dict):
     """Pre-generate photo in background, store for next user confirmation."""
     try:
@@ -491,6 +519,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 voice_sent = True
         except Exception as tts_err:
             logger.error(f"TTS failed for {role_id}: {tts_err}")
+
+    # -- Video generation: triggered by video request keywords --
+    video_request_keywords = ["发个视频", "看看视频", "视频看看", "小视频", "拍个视频", "录一段", "动态", "发视频"]
+    user_requests_video = any(kw in user_text for kw in video_request_keywords)
+
+    if config.VIDEO_GEN_ENABLED and user_requests_video and clean_reply and generate_video:
+        required_tier = get_max_tier_for_text(role_id, clean_reply)
+        if unlock_tier >= required_tier:
+            try:
+                video_sent_flag = await _generate_and_send_video(update, clean_reply, role_id, role_name)
+                if video_sent_flag:
+                    voice_sent = True
+            except Exception as e:
+                logger.error(f"Video gen error: {e}")
+        else:
+            tier_names = {0: "免费", 1: "等级1", 2: "等级2", 3: "等级3"}
+            tn = tier_names.get(required_tier, f"等级{required_tier}")
+            await update.message.reply_text(
+                f"哎呀～这段视频需要解锁{tn}才能看哦！\n"
+                f"继续和{role_name}聊天升级吧 💕"
+            )
 
     # -- Image generation: ONLY when user explicitly asks for photos, with tier check --
     photo_request_keywords = ["发张照片", "看看你", "照片呢", "发照片", "照片看看", "看看照片", "有没有照片", "发图", "看图", "图片", "你的照片", "给我看看你", "想看看你", "自拍", "写真"]

@@ -58,6 +58,14 @@ class Config:
     IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "agnes-image-2.1-flash")
     IMAGE_GEN_SIZE: str = os.getenv("IMAGE_GEN_SIZE", "1024x1024")
 
+    # Video Generation (Agnes AI, image-to-video / text-to-video)
+    VIDEO_GEN_ENABLED: bool = os.getenv("VIDEO_GEN_ENABLED", "true").lower() == "true"
+    VIDEO_GEN_MODEL: str = os.getenv("VIDEO_GEN_MODEL", "agnes-video-v2.0")
+    VIDEO_GEN_SIZE: str = os.getenv("VIDEO_GEN_SIZE", "1280x704")
+    VIDEO_GEN_SECONDS: str = os.getenv("VIDEO_GEN_SECONDS", "5")
+    VIDEO_GEN_POLL_INTERVAL: int = int(os.getenv("VIDEO_GEN_POLL_INTERVAL", "5"))
+    VIDEO_GEN_POLL_TIMEOUT: int = int(os.getenv("VIDEO_GEN_POLL_TIMEOUT", "600"))
+
     # Reference image URL per role (set IMAGE_REF_{ROLE_ID} env var)
     @classmethod
     def get_image_ref(cls, role_id: str) -> str:
