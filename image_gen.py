@@ -112,17 +112,13 @@ async def _pick_ref(page_url: str) -> str | None:
 
 
 def _build_visual_prompt(text: str, role_id: str = "") -> str:
-    if role_id:
-        from roles import ROLES
-        role = ROLES.get(role_id, {})
-    char_desc = _ROLE_CHARACTER.get(role_id, "beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup, perfect hands")
-    text = text.strip()[:300]
+    text = text.strip()[:400]
     quality = "high quality, photorealistic, soft natural lighting, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece"
-    return char_desc + ", " + quality + ", " + random.choice(_COMPOSITIONS) + " -- scene: " + text
+    return quality + ", " + random.choice(_COMPOSITIONS) + " -- scene: " + text
 
 
 async def generate_image(prompt: str, role_id: str = "", page_url: str = "") -> bytes | None:
-    """Generate via Agnes img2img. page_url is a page with reference images."""
+    """Generate via Agnes. img2img when page_url is set, text2img otherwise."""
     if not config.IMAGE_GEN_ENABLED:
         return None
     if not config.IMAGE_GEN_API_KEY:
@@ -130,32 +126,31 @@ async def generate_image(prompt: str, role_id: str = "", page_url: str = "") -> 
         return None
     if not page_url:
         page_url = config.get_image_ref(role_id)
-    if not page_url:
-        logger.warning(f"No image page URL for role={role_id}")
-        return None
 
-    ref_url = await _pick_ref(page_url)
-    if not ref_url:
-        logger.warning(f"No images found on {page_url[:60]}")
-        return None
+    ref_url = None
+    if page_url:
+        ref_url = await _pick_ref(page_url)
 
     visual_prompt = _build_visual_prompt(prompt, role_id)
-    logger.info(f"Image gen: role={role_id} prompt={prompt[:80]}...")
+    mode = "img2img" if ref_url else "text2img"
+    logger.info(f"Image gen [{mode}]: role={role_id} prompt={prompt[:80]}...")
     return await _call_agnes_api(visual_prompt, ref_url)
 
 
-async def _call_agnes_api(prompt: str, ref_url: str) -> bytes | None:
+async def _call_agnes_api(prompt: str, ref_url: str | None = None) -> bytes | None:
     payload = {
         "model": config.IMAGE_GEN_MODEL,
         "prompt": prompt,
         "negative_prompt": NEGATIVE_PROMPT,
-        "image": ref_url,
         "n": 1,
         "size": config.IMAGE_GEN_SIZE,
     }
+    if ref_url:
+        payload["image"] = ref_url
 
     api_url = f"{config.IMAGE_GEN_BASE_URL}/images/generations"
-    logger.info(f"Agnes img2img: ref={ref_url[:60]}...")
+    mode = "img2img" if ref_url else "text2img"
+    logger.info(f"Agnes {mode}: ref={bool(ref_url)}")
 
     try:
         async with httpx.AsyncClient(timeout=GEN_TIMEOUT, follow_redirects=True) as client:
