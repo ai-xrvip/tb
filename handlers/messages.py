@@ -204,6 +204,9 @@ def _get_conversation_rules(history_len: int) -> str:
 
 def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     """构建发送给 LLM 的消息列表（含世界书/记忆）"""
+    role = get_role(role_id)
+    system_prompt = resolve_system_prompt(role, user_name="用户") if role else ""
+
     # -- Erotic mode override --
     if db.get_erotic_mode(user_id):
         erotic_override = (
