@@ -119,6 +119,7 @@ async def _call_agnes_api(prompt: str, ref_url: str) -> bytes | None:
     payload = {
         "model": config.IMAGE_GEN_MODEL,
         "prompt": prompt,
+        "negative_prompt": NEGATIVE_PROMPT,
         "image": ref_url,
         "n": 1,
         "size": config.IMAGE_GEN_SIZE,

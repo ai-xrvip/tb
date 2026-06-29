@@ -522,20 +522,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"TTS failed for {role_id}: {tts_err}")
 
     # -- Auto media generation: AI reply text -> prompt, auto decide image or video --
-    # Negative keywords: if reply contains these, skip all generation
-    neg_keywords = [
-        "不开心", "难过", "伤心", "好伤心", "哭了", "想哭",
-        "累了", "好累", "困了", "好困", "睡觉", "睡了",
-        "生病", "不舒服", "难受", "头疼", "肚子疼",
-        "生气", "好气", "烦死了", "好烦", "烦躁",
-        "吵架", "分手", "离开", "再见", "拜拜",
-        "对不起", "抱歉", "不好意思", "是我的错",
-        "不想说话", "别理我", "走开", "滚",
-        "怎么办", "完蛋", "崩溃",
-    ]
-    has_negative = any(kw in clean_reply for kw in neg_keywords)
+    # Always try to generate when reply has content; negative prompts handle quality in API
 
-    if not has_negative and clean_reply and len(clean_reply) > 10:
+    if clean_reply and len(clean_reply) > 5:
         required_tier = get_max_tier_for_text(role_id, clean_reply)
         if unlock_tier >= required_tier:
             # Decide video vs image based on motion cues in reply
@@ -551,7 +540,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     video_sent_flag = await _generate_and_send_video(update, clean_reply, role_id, role_name)
                     if video_sent_flag:
-                        voice_sent = True  # video already sent text inline, skip trailing text
+                        voice_sent = True
                 except Exception as e:
                     logger.error(f"Video gen error: {e}")
             elif config.IMAGE_GEN_ENABLED and generate_image:
@@ -561,7 +550,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_photo(img_data)
                 except Exception as e:
                     logger.error(f"Image gen error: {e}")
-
     if clean_reply:
         if not voice_sent:
             await update.message.reply_text(clean_reply)

@@ -23,6 +23,17 @@ _VIDEO_COMPOSITIONS = [
     "stretching and yawning, morning sunlight, bedroom, cute casual outfit, cozy feeling",
 ]
 
+VIDEO_NEGATIVE_PROMPT = (
+    "blurry, low quality, jpeg artifacts, watermark, text, signature, "
+    "distorted face, deformed face, ugly face, asymmetric eyes, "
+    "bad anatomy, deformed anatomy, disfigured, mutated, extra limbs, "
+    "bad hands, ugly hands, missing fingers, extra fingers, fused fingers, "
+    "poorly drawn hands, deformed hands, mutated hands, "
+    "worst quality, lowres, error, cropped, out of frame, "
+    "flickering, jittery, unstable, warping, morphing artifacts, "
+    "poorly drawn feet, bad feet, extra toes, missing toes"
+)
+
 IMG_TAG_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.IGNORECASE)
 MD_IMG_RE = re.compile(r'!\[.*?\]\(([^)]+)\)')
 
@@ -119,6 +130,7 @@ async def _submit_video_task(prompt: str, ref_url: str | None = None) -> str | N
     payload = {
         "model": config.VIDEO_GEN_MODEL,
         "prompt": prompt,
+        "negative_prompt": VIDEO_NEGATIVE_PROMPT,
         "n": 1,
         "size": config.VIDEO_GEN_SIZE,
         "seconds": config.VIDEO_GEN_SECONDS,
