@@ -472,80 +472,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.use_free_count(user_id)
 
     # Build messages AFTER counting/charging to avoid stale counts
-    # -- Erotic mode trigger / exit detection --
+    # -- Erotic mode trigger / exit detection (admin only) --
     EROTIC_TRIGGER = "进入深夜模式"
     EROTIC_EXIT = "退出深夜模式"
-    if EROTIC_TRIGGER in user_text:
-        db.set_erotic_mode(user_id, True)
-        await update.message.reply_text("🔞 深夜模式已激活…今夜你是我的主人")
-        return
-    if EROTIC_EXIT in user_text:
-        db.set_erotic_mode(user_id, False)
-        await update.message.reply_text("💤 已退出深夜模式，变回你的小可爱啦～")
-        return
-
-    messages = _build_messages(user_id, role_id, user_text)
-    await update.message.chat.send_action(action="typing")
-
-    try:
-        provider = await _get_provider_for_role(role_id)
-        if config.ENABLE_STREAMING:
-            full_reply = ""
-            async for token in provider.chat_stream(
-                messages=messages, max_tokens=1024, temperature=0.9,
-            ):
-                full_reply += token
+    if EROTIC_TRIGGER in user_text or EROTIC_EXIT in user_text:
+        if user_id not in config.ADMIN_IDS:
+            await update.message.reply_text("🚫 你没有权限使用这个功能哦～")
+            return
+        if EROTIC_TRIGGER in user_text:
+            db.set_erotic_mode(user_id, True)
+            await update.message.reply_text("🔞 深夜模式已激活…今夜你是我的主人")
         else:
-            full_reply = await provider.chat(messages=messages, max_tokens=1024, temperature=0.9)
-    except RateLimitError:
-        await update.message.reply_text(_get_role_busy_message(role_id))
+            db.set_erotic_mode(user_id, False)
+            await update.message.reply_text("💤 已退出深夜模式，变回你的小可爱啦～")
         return
-    except TokenLimitError:
-        await update.message.reply_text(
-            f"对话太长啦～{role.get('name', '我') if role else '我'}的脑子装不下了，试试 /clear 清空再来聊好不好 (*/ω＼*)"
-        )
-        return
-    except ProviderError as e:
-        logger.error(f"LLM error user_id={user_id}: {e}")
-        await update.message.reply_text(_get_role_busy_message(role_id))
-        return
-
-    if not full_reply:
-        await update.message.reply_text(_get_role_busy_message(role_id))
-        return
-
-    clean_reply = full_reply.strip()
-        # 计算对方回复间隔（秒），用于节奏适应
-    user_resp_time = 999.0
-    if prev_msg_time:
-        user_resp_time = _time.time() - prev_msg_time
-    
-    # ── 情感可视化（仅记录心情，不在回复前加表情）──
-    mood = {"id": "neutral"}
-    try:
-        mood = get_mood_for_user(user_id, role_id)
-    except Exception as e:
-        logger.debug(f"Non-critical: {e}")
-    # delay disabled per user request
-    # await asyncio.sleep(delay)
-
-    # -- TTS voice: random probability OR user explicitly requests voice --
-    voice_request_keywords = ["说句话", "发语音", "听听你的声音", "你的声音", "说话听听", "说句话听听", "语音", "声音好听", "想听你说话"]
-    user_requests_voice = any(kw in user_text for kw in voice_request_keywords)
-    voice_trigger_rate = 1.0 if user_requests_voice else config.TTS_TRIGGER_RATE
-
-    voice_sent = False
-    if config.TTS_ENABLED and clean_reply and generate_role_voice:
-        try:
-            voice_data = await generate_role_voice(
-                clean_reply, role_id, role,
-                trigger_rate=voice_trigger_rate,
-            )
-            if voice_data:
-                await update.message.reply_voice(voice_data)
-                voice_sent = True
-        except Exception as tts_err:
-            logger.error(f"TTS failed for {role_id}: {tts_err}")
 
     # -- Auto media generation: AI reply text -> prompt, auto decide image or video --
     # Always try to generate when reply has content; negative prompts handle quality in API
