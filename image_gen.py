@@ -118,7 +118,7 @@ def _build_visual_prompt(text: str, role_id: str = "") -> str:
     char_desc = _ROLE_CHARACTER.get(role_id, "beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup, perfect hands")
     text = text.strip()[:300]
     quality = "high quality, photorealistic, soft natural lighting, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece"
-    return char_desc + ", " + quality + " -- same person as reference photo, identical face, identical features, cosplay photography, " + random.choice(_COMPOSITIONS) + " -- scene: " + text
+    return char_desc + ", " + quality + ", " + random.choice(_COMPOSITIONS) + " -- scene: " + text
 
 
 async def generate_image(prompt: str, role_id: str = "", page_url: str = "") -> bytes | None:

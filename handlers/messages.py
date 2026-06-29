@@ -573,8 +573,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"Image gen error: {e}")
     if clean_reply:
-        await update.message.reply_text(clean_reply)
-
         # Mood-aware sticker injection
         try:
             mood_id_val = mood.get("id", "neutral")
