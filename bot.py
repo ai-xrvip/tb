@@ -50,6 +50,23 @@ from handlers.testimonial import cmd_screenshot, cmd_post_testimonial
 _shutdown_flag = threading.Event()
 shutdown_event = asyncio.Event()
 _global_jobs_registered = False
+_start_time = time.time()
+
+
+def _get_memory_usage() -> dict:
+    """Read memory usage from /proc/self/status (Linux only)."""
+    try:
+        with open("/proc/self/status") as f:
+            raw = f.read()
+        vm_size = vm_rss = 0
+        for line in raw.splitlines():
+            if line.startswith("VmSize:"):
+                vm_size = int(line.split()[1])
+            elif line.startswith("VmRSS:"):
+                vm_rss = int(line.split()[1])
+        return {"vm_size_kb": vm_size, "vm_rss_kb": vm_rss}
+    except Exception:
+        return {"vm_size_kb": 0, "vm_rss_kb": 0}
 
 
 def validate_config() -> list[str]:
@@ -149,6 +166,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
             user_count = _db.get_total_user_count() if hasattr(_db, "get_total_user_count") else 0
         except Exception:
             user_count = 0
+        memory = _get_memory_usage()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -157,6 +175,9 @@ class WebhookHandler(BaseHTTPRequestHandler):
             "active_bots": len(self.apps),
             "users": user_count,
             "provider": config.LLM_PROVIDER,
+            "memory": memory,
+            "global_jobs_registered": _global_jobs_registered,
+            "uptime_seconds": int(time.time() - _start_time),
         }).encode())
 
     def _handle_epay_callback(self):

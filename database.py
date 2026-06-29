@@ -14,6 +14,28 @@ from config import config
 
 _db_lock = threading.Lock()
 _global_conn: sqlite3.Connection = None
+_wal_checkpointer_started = False
+
+
+def _start_wal_checkpointer(interval: int = 60):
+    """启动后台线程定期执行 WAL checkpoint，防止 WAL 文件无限增长。"""
+    global _wal_checkpointer_started
+    if _wal_checkpointer_started:
+        return
+    _wal_checkpointer_started = True
+
+    def _checkpoint_loop():
+        while True:
+            _time.sleep(interval)
+            try:
+                with _db_lock:
+                    if _global_conn is not None:
+                        _global_conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except Exception:
+                pass  # 连接可能已被关闭，静默忽略
+
+    t = threading.Thread(target=_checkpoint_loop, daemon=True, name="wal-checkpointer")
+    t.start()
 
 
 def _ensure_db_dir(db_path: str):
@@ -32,6 +54,10 @@ def _get_conn(db_path: str) -> sqlite3.Connection:
         _global_conn.row_factory = sqlite3.Row
         _global_conn.execute("PRAGMA journal_mode=WAL")
         _global_conn.execute("PRAGMA busy_timeout=5000")
+        _global_conn.execute("PRAGMA synchronous=NORMAL")
+        _global_conn.execute("PRAGMA cache_size=-64000")
+        _global_conn.execute("PRAGMA wal_autocheckpoint=1000")
+        _start_wal_checkpointer()
     return _global_conn
 
 
@@ -44,6 +70,41 @@ class Database:
     @property
     def conn(self) -> sqlite3.Connection:
         return _get_conn(self.db_path)
+
+    def _execute(self, sql: str, params=None, retries: int = 3):
+        """Execute SQL with exponential backoff retry on 'database is locked'.
+        Does NOT acquire self.lock — caller must hold it. This avoids deadlock.
+        """
+        for attempt in range(retries):
+            try:
+                return self.conn.execute(sql, params or ())
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < retries - 1:
+                    _time.sleep(0.1 * (2 ** attempt))
+                    continue
+                raise
+
+    def _executemany(self, sql: str, seq_of_params, retries: int = 3):
+        """Execute executemany with retry. Caller must hold self.lock."""
+        for attempt in range(retries):
+            try:
+                return self.conn.executemany(sql, seq_of_params)
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < retries - 1:
+                    _time.sleep(0.1 * (2 ** attempt))
+                    continue
+                raise
+
+    def _commit(self, retries: int = 3):
+        """Commit with retry. Caller must hold self.lock."""
+        for attempt in range(retries):
+            try:
+                return self.conn.commit()
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < retries - 1:
+                    _time.sleep(0.1 * (2 ** attempt))
+                    continue
+                raise
 
     def _init_tables(self):
         try:
@@ -830,7 +891,7 @@ class Database:
             )
             self.conn.commit()
 
-    # ── Knowledge Graph (thread-safe wrappers) ──
+    # ?? Knowledge Graph (thread-safe wrappers) ??
     def get_knowledge(self, user_id: int, role_id: str) -> dict[str, str]:
         with self.lock:
             rows = self.conn.execute(
