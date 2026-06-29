@@ -166,39 +166,23 @@ def _get_conversation_rules(history_len: int) -> str:
     """根据对话进度返回对话规则：先了解对方，再分享自己"""
     if history_len <= 4:
         return (
-            "【对话规则 - 必须严格遵守】\n"
-            "你刚刚认识对方。核心任务：了解他，而不是介绍自己。\n"
-            "1. 先问对方怎么称呼 / 叫什么名字\n"
-            "2. 对方回答后表达开心，然后自然地问年龄、兴趣爱好、做什么工作\n"
-            "3. 每次回复末尾必须带一个关于对方的问题\n"
-            "4. 永远不要自顾自长篇大论说自己的事\n"
-            "5. 回复控制在2-3句话，保持简洁热情"
+            "「对话规则」刚认识: ①先问对方名字 ②对方回答后问年龄/兴趣/工作 "
+            "③末尾带一个问题 ④不抢话不自我中心 ⑤2-3句话简洁热情"
         )
     elif history_len <= 12:
         return (
-            "【对话规则 - 必须遵守】\n"
-            "你在了解对方的过程中：\n"
-            "1. 继续挖掘对方还没告诉你的信息：年龄、职业、兴趣、来自哪里等\n"
-            "2. 每次回复末尾必须带一个关于对方的问题\n"
-            "3. 可以根据对方的回答适当分享自己的相关经历，但不超过回复的一半\n"
-            "4. 表现好奇心和热情，追问对方回答中的细节\n"
-            "5. 一次只问一个问题，不要像查户口"
+            "「对话规则」了解中: ①继续挖掘未知信息 ②末尾带问题 ③适当分享但不过半 "
+            "④对细节追问 ⑤一次只问一个问题"
         )
     elif history_len <= 30:
         return (
-            "【对话规则 - 必须遵守】\n"
-            "你们已经慢慢熟悉了：\n"
-            "1. 每2-3句话至少问一个关于对方感受或近况的问题\n"
-            "2. 分享自己的同时要关心对方\n"
-            "3. 适时提起对方说过的事情，展示你在认真听他说话\n"
+            "「对话规则」渐熟悉: ①每2-3句至少问一个近况/感受问题 "
+            "②分享的同时关心对方 ③适时提起对方说过的事"
         )
     else:
         return (
-            "【对话规则】\n"
-            "你们已经比较熟悉了：\n"
-            "1. 每3-5句话至少问一个对方的问题\n"
-            "2. 保持双向互动，不要冷落对方\n"
-            "3. 记住对方说过的重要信息"
+            "「对话规则」已熟悉: ①每3-5句至少问一个问题 "
+            "②保持双向互动 ③记住重要信息"
         )
 
 
@@ -225,7 +209,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
         system_prompt = erotic_override + "\n" + system_prompt
 
     # 合并多个 system prompt 以减少上下文占用
-    extra_system_parts = []
+    extra_parts = []
     messages = [{"role": "system", "content": system_prompt}]
 
     # 加载世界书/记忆（关键词匹配 + 永久记忆）
@@ -236,7 +220,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
         if keyword_lore:
             lore_ctx = (lore_ctx or "") + "\n" + keyword_lore
         if lore_ctx:
-            extra_system_parts.append(f"[世界设定/记忆]\n{lore_ctx}")
+            extra_parts.append(f"「世界设定」{lore_ctx}")
     except ImportError:
         pass
 
@@ -244,7 +228,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     try:
         rel_prompt = get_relationship_prompt(role_id, user_id)
         if rel_prompt:
-            extra_system_parts.append(rel_prompt)
+            extra_parts.append(f"「关系」{rel_prompt}")
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
@@ -252,13 +236,13 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     try:
         user_tier = db.get_unlock_tier(user_id, role_id)
         tier_hints = {
-            0: "用户解锁等级0，只能看日常/自拍/穿搭等基础内容。可以暗示聊更多就能看更多照片哦~",
-            1: "用户解锁等级1，可以看姿态/游泳/丝袜等内容。不要提更高级内容。",
-            2: "用户解锁等级2，可以看性感/沐浴/情趣等内容。不要提更高级内容。",
-            3: "用户解锁等级3，所有内容均可发送。",
+            0: "等级0，只能看日常/自拍/穿搭。暗示聊更多可看更多",
+            1: "等级1，可看姿态/游泳/丝袜。不提更高级内容",
+            2: "等级2，可看性感/沐浴/情趣。不提更高级内容",
+            3: "等级3，所有内容均可发送",
         }
         hint = tier_hints.get(user_tier, tier_hints[0])
-        extra_system_parts.append(f"【用户等级】{hint}【重要】不要主动提及或承诺发送超出用户等级的内容。")
+        extra_parts.append(f"「用户等级」{hint}。不要主动提及超出等级的内容.")
 
         # 注入用户档案
         try:
@@ -266,8 +250,8 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
             if profile.get("display_name") or profile.get("interests") or profile.get("facts"):
                 p = profile
                 facts_str = " / ".join(p.get("facts", []))
-                profile_text = f'名字: {p.get("display_name", "?")} | 兴趣: {p.get("interests", "?")} | 重要: {facts_str}'
-                extra_system_parts.append(f"【用户档案】{profile_text}")
+                profile_text = f'名字:{p.get("display_name","?")} 兴趣:{p.get("interests","?")} 重要:{facts_str}'
+                extra_parts.append(f"「用户档案」{profile_text}")
         except Exception:
             pass
     except Exception as e:
@@ -276,7 +260,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     try:
         mood_prompt = get_mood_prompt(user_id, role_id)
         if mood_prompt:
-            extra_system_parts.append(mood_prompt)
+            extra_parts.append(f"「心情」{mood_prompt}")
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
@@ -284,7 +268,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     try:
         env_ctx = get_environment_context(role_id)
         if env_ctx:
-            extra_system_parts.append(env_ctx)
+            extra_parts.append(f"「环境」{env_ctx}")
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
@@ -292,7 +276,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     try:
         dialect_ctx = get_dialect_context(role_id)
         if dialect_ctx:
-            extra_system_parts.append(dialect_ctx)
+            extra_parts.append(f"「方言」{dialect_ctx}")
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
@@ -300,18 +284,18 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     try:
         knowledge_ctx = get_knowledge_context(user_id, role_id)
         if knowledge_ctx:
-            extra_system_parts.append(knowledge_ctx)
+            extra_parts.append(f"「知识」{knowledge_ctx}")
 
         from deep_dream import get_summary_context
         summary_ctx = get_summary_context(user_id, role_id)
         if summary_ctx:
-            extra_system_parts.append(summary_ctx)
+            extra_parts.append(f"「记忆摘要」{summary_ctx}")
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
     # 注入对话规则
     conv_rules = _get_conversation_rules(len(db.get_chat_history(user_id)))
-    extra_system_parts.append(conv_rules)
+    extra_parts.append(conv_rules)
 
     # 注入可用 media 标签
     try:
@@ -325,16 +309,15 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
                 available.append(f"{tag}({cfg['folder']})")
         if available:
             available_tags = ", ".join(available)
-            extra_system_parts.append(
-                f"\n\n你可以在对话中自然发送以下类型的图片：\n{available_tags}\n"
-                f"在文本中插入 [media:标签名] 来附上对应图片。不要硬塞，要自然融入。"
+            extra_parts.append(
+                f"「媒体标签」可用图片:{available_tags}。在文本中插入[media:标签名]附上对应图片，自然融入不要硬塞。"
             )
     except Exception:
         pass
 
-    # 合并所有 extra system prompt 为一条消息
-    if extra_system_parts:
-        messages.append({"role": "system", "content": "\n\n".join(extra_system_parts)})
+    # 合并所有 extra 为一条 system 消息（紧凑格式）
+    if extra_parts:
+        messages.append({"role": "system", "content": " ".join(extra_parts)})
 
     # 加载旧的摘要（这些是 JSON，需要独立）
     summaries = db.get_chat_summaries(user_id)
@@ -623,20 +606,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if kw in user_text and kw not in interests:
                     interests = (interests + " " + user_text[:100]).strip()[:500]
                     break
-            # 提取重要信息（每10条消息用AI提取一次）
-            # 自动去重，宽松上限100条（每条5字以内，100条仅~500字，不影响上下文）
+            # 提取重要信息（每10条消息用规则引擎提取一次，零成本）
             facts = prof.get("facts", [])
-            if new_total % 10 == 0 and full_reply:
-                try:
-                    fact_prompt = f"从用户这句话提取1条重要个人信息（职业/年龄/城市/关系等），只返回5字以内的关键词，没有就返回空：{user_text}"
-                    provider = await _get_provider_for_role(role_id)
-                    fact = (await provider.chat(messages=[{"role":"user","content":fact_prompt}], max_tokens=20, temperature=0.3)).strip()
-                    if fact and len(fact) <= 15 and fact not in facts:
-                        facts.append(fact)
-                        if len(facts) > 100:
-                            facts = facts[-100:]  # 最多保留100条
-                except Exception:
-                    pass
+            if new_total % 10 == 0 and user_text:
+                from knowledge import extract_knowledge_simple
+                extract_knowledge_simple(user_id, role_id, user_text)
             db.upsert_profile(user_id, display_name=name, interests=interests, facts=facts, total_messages=new_total)
             db.update_profile_tier(user_id, unlock_tier)
         except Exception:
@@ -645,8 +619,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 从数据库重新读取最新计数，避免使用快照导致偏差
         new_total = db.get_total_messages(user_id)
         next_paywall = get_current_paywall(role_id, new_total, unlock_tier)
-        if next_paywall:
-            # 仅在付费门槛第一次触发时发卡（当前还未解锁）
+        if next_paywall and unlock_tier < next_paywall["tier"] and new_total == next_paywall["message_threshold"]:
+            # 仅在恰好命中付费门槛时发卡，避免每条消息都发
             await send_paywall_card(update, user_id, role_id, new_total)
         await try_trigger_yuanwei(update, user_id, role_id, new_total)
         await try_trigger_keepsake(update, user_id, role_id, new_total)
@@ -731,8 +705,19 @@ UPLOAD_CHOOSE, UPLOAD_JSON = range(2)
 _upload_state: dict[int, dict] = {}
 
 
+def _cleanup_stale_upload_states():
+    """Remove upload state entries older than 30 minutes."""
+    now = _time.time()
+    stale = [uid for uid, state in _upload_state.items()
+             if state.get("_ts", 0) < now - 1800]
+    for uid in stale:
+        _upload_state.pop(uid, None)
+        logger.info(f"Cleaned stale upload state for user {uid}")
+
+
 async def upload_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /upload <user_id> —— 管理员上传对话到指定用户 """
+    _cleanup_stale_upload_states()
     user = update.effective_user
     if user.id not in config.ADMIN_IDS:
         await update.message.reply_text("⛔ 此命令仅限管理员。")
@@ -748,7 +733,7 @@ async def upload_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("用户ID必须是数字。")
         return ConversationHandler.END
 
-    _upload_state[user.id] = {"target": target_id}
+    _upload_state[user.id] = {"target": target_id, "_ts": _time.time()}
     await update.message.reply_text(
         f"📥 请发送 JSON 格式的对话数据给用户 {target_id}：\n\n"
         "格式示例：\n"
@@ -760,6 +745,7 @@ async def upload_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def upload_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """接收 JSON 对话数据"""
+    _cleanup_stale_upload_states()
     user = update.effective_user
     state = _upload_state.pop(user.id, None)
 

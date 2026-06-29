@@ -1,10 +1,10 @@
 """
-閰嶇疆绠＄悊 鈥斺€?澶?Bot Token + 澶?LLM 鎻愪緵鍟?+ 鏀粯 + 鎻掍欢绯荤粺
+Configuration manager — Multi Bot Token + Multi LLM Provider + Payment + Plugin system
 
-鍙傝€?
-- chatgpt-on-wechat: 澶氬钩鍙?+ 鎻掍欢
-- karfly bot: 澶氳瑷€ + 娴佸紡
-- Openaibot: 瑙掕壊棰勮 + 澶氭ā鍨?
+References:
+- chatgpt-on-wechat: Multi-platform + plugins
+- karfly bot: Multi-language + streaming
+- Openaibot: Role presets + multi-model
 """
 import os
 import re
@@ -19,7 +19,7 @@ else:
 
 
 def _load_bot_tokens() -> dict[str, str]:
-    """鍔ㄦ€佸姞杞芥墍鏈?*_BOT_TOKEN 鐜鍙橀噺"""
+    """Load all *_BOT_TOKEN env vars dynamically"""
     tokens = {}
     pattern = re.compile(r'^(.+)_BOT_TOKEN$')
     for key, value in os.environ.items():
@@ -35,20 +35,20 @@ _data_dir = Path("/data")
 _default_db = str(_data_dir / "bot.db") if _data_dir.exists() and os.access(str(_data_dir), os.W_OK) else str(Path(__file__).parent / "bot.db")
 
 class Config:
-    # 鈹€鈹€ LLM 鎻愪緵鍟嗛€夋嫨 鈹€鈹€
+    # ── LLM Provider ──
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "deepseek")  # deepseek / openai
 
-    # 鈹€鈹€ DeepSeek 鈹€鈹€
+    # ── DeepSeek ──
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
-    # 鈹€鈹€ OpenAI 鈹€鈹€
+    # ── OpenAI ──
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_BASE_URL: str | None = os.getenv("OPENAI_BASE_URL") or None
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o")
 
-    # 鈹€鈹€ 娴佸紡杈撳嚭 鈹€鈹€
+    # ── Streaming ──
     ENABLE_STREAMING: bool = os.getenv("ENABLE_STREAMING", "true").lower() == "true"
 
     # Image Generation (OpenAI-compatible)
@@ -71,84 +71,79 @@ class Config:
     def get_image_ref(cls, role_id: str) -> str:
         return os.getenv(f"IMAGE_REF_{role_id.upper()}", "")
 
-    # 鈹€鈹€ 鍔ㄦ€佸姞杞芥墍鏈?Bot Token 鈹€鈹€
+    # ── Dynamic Bot Token loader ──
     BOT_TOKENS: dict[str, str] = _load_bot_tokens()
 
     # ── Owner (Auto VIP) ──
     OWNER_ID: int = int(os.getenv("OWNER_ID", "5405770555"))
 
-    # 鈹€鈹€ Admin 鈹€鈹€
+    # ── Admin ──
     ADMIN_IDS: list[int] = [
         int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()
     ]
 
-    # 鈹€鈹€ 鏁版嵁搴?鈹€鈹€
+    # ── Database ──
     DB_PATH: str = os.getenv("DB_PATH", _default_db)
 
-    # 鈹€鈹€ 瀵硅瘽 鈹€鈹€
+    # ── Conversation ──
     MAX_HISTORY_ROUNDS: int = int(os.getenv("MAX_HISTORY_ROUNDS", "100"))
     FREE_TRIAL_COUNT: int = int(os.getenv("FREE_TRIAL_COUNT", "20"))
 
-    # 鈹€鈹€ Webhook 鈹€鈹€
+    # ── Webhook ──
     WEBHOOK_URL: str | None = os.getenv("WEBHOOK_URL") or None
 
-    # 鈹€鈹€ 鏀粯锛堥鐣欙級 鈹€鈹€
+    # ── Payment (EPay) ──
     DONATION_API_TOKEN: str = os.getenv("DONATION_API_TOKEN", "")
     PAYMENT_MODE: str = os.getenv("PAYMENT_MODE", "test")  # test / production
-    # ?? ??? (EPay) ??
     EPAY_PID: str = os.getenv("EPAY_PID", "")
     EPAY_KEY: str = os.getenv("EPAY_KEY", "")
     EPAY_URL: str = os.getenv("EPAY_URL", "https://pay.example.com/submit.php")
     EPAY_NOTIFY_URL: str = os.getenv("EPAY_NOTIFY_URL", "")
 
-    # 鈹€鈹€ 閫熺巼闄愬埗 鈹€鈹€
+    # ── Rate Limit ──
     RATE_LIMIT_ENABLED: bool = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
     RATE_LIMIT_MAX: int = int(os.getenv("RATE_LIMIT_MAX", "15"))
     RATE_LIMIT_WINDOW: int = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
 
-    # 鈹€鈹€ 璇煶杞枃瀛?鈹€鈹€
+    # ── STT (Speech-to-Text) ──
     ENABLE_STT: bool = os.getenv("ENABLE_STT", "false").lower() == "true"
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "tiny")  # tiny / small / medium
     WHISPER_LANGUAGE: str | None = os.getenv("WHISPER_LANGUAGE") or "zh"  # zh / auto / en
 
-    # 鈹€鈹€ 鎻掍欢 鈹€鈹€
+    # ── Plugins ──
     ENABLED_PLUGINS: list[str] = [
         x.strip() for x in os.getenv("ENABLED_PLUGINS", "greetings,mood_plugin").split(",") if x.strip()
     ]
 
-    # 鈹€鈹€ 棰戦亾鍏憡 鈹€鈹€
-    ANNOUNCEMENT_CHANNEL: str | None = os.getenv("ANNOUNCEMENT_CHANNEL") or None  # @棰戦亾鍚?鎴?-100xxx
+    # ── Channel Announcement ──
+    ANNOUNCEMENT_CHANNEL: str | None = os.getenv("ANNOUNCEMENT_CHANNEL") or None  # @channel or -100xxx
 
-    # 鈹€鈹€ 淇濇椿锛圧ailway 闃蹭紤鐪狅級 鈹€鈹€
+    # ── Keepalive (Railway anti-sleep) ──
     ENABLE_KEEPALIVE: bool = os.getenv("ENABLE_KEEPALIVE", "true").lower() == "true"
-    KEEPALIVE_INTERVAL: int = int(os.getenv("KEEPALIVE_INTERVAL", "240"))  # 绉掞紝榛樿4鍒嗛挓
+    KEEPALIVE_INTERVAL: int = int(os.getenv("KEEPALIVE_INTERVAL", "240"))  # seconds, default 4 min
 
-    # 鈹€鈹€ TTS 璇煶 鈹€鈹€
-    # ?? TTS ?? ??
+    # ── TTS ──
     TTS_ENABLED: bool = os.getenv("TTS_ENABLED", "true").lower() == "true"
     TTS_PROVIDER: str = os.getenv("TTS_PROVIDER", "azure")  # azure / edge
     TTS_TRIGGER_RATE: float = float(os.getenv("TTS_TRIGGER_RATE", "0.15"))
     TTS_MAX_CHARS: int = int(os.getenv("TTS_MAX_CHARS", "300"))
 
-    # ?? Azure TTS (?? 50???/?, ????) ??
+    # Azure TTS (500K chars/month free)
     AZURE_SPEECH_KEY: str = os.getenv("AZURE_SPEECH_KEY", "")
     AZURE_SPEECH_REGION: str = os.getenv("AZURE_SPEECH_REGION", "eastasia")
 
-    # ?? Edge TTS (????) ??
+    # Edge TTS (free fallback)
     TTS_VOICE: str = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
 
-    # ── STT 语音转文字 (Cloudflare Workers AI, 免费 ~3000次/天) ──
+    # ── STT: Cloudflare Workers AI ──
     STT_PROVIDER: str = os.getenv("STT_PROVIDER", "cloudflare")
     CF_ACCOUNT_ID: str = os.getenv("CF_ACCOUNT_ID", "")
     CF_API_TOKEN: str = os.getenv("CF_API_TOKEN", "")
 
-
-
-
-    # 鈹€鈹€ 缇よ亰 鈹€鈹€
+    # ── Group Chat ──
     ENABLE_GROUP_CHAT: bool = os.getenv("ENABLE_GROUP_CHAT", "true").lower() == "true"
 
-    # 鈹€鈹€ 璇█ 鈹€鈹€
+    # ── Language ──
     DEFAULT_LANG: str = os.getenv("DEFAULT_LANG", "zh")
 
     @classmethod
@@ -189,7 +184,3 @@ class Config:
         return errors
 
 config = Config()
-
-
-
-

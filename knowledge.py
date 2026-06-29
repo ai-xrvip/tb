@@ -15,32 +15,17 @@ from utils.logger import logger
 
 def get_user_knowledge(user_id: int, role_id: str) -> dict[str, str]:
     """获取用户的所有知识条目，返回 {key: value}"""
-    rows = db.conn.execute(
-        "SELECT key, value FROM knowledge_graph WHERE user_id=? AND role_id=?",
-        (user_id, role_id),
-    ).fetchall()
-    return {r["key"]: r["value"] for r in rows}
+    return db.get_knowledge(user_id, role_id)
 
 
 def set_user_knowledge(user_id: int, role_id: str, key: str, value: str):
     """设置一条知识条目"""
-    now = time.time()
-    db.conn.execute(
-        "INSERT INTO knowledge_graph (user_id, role_id, key, value, updated_at) "
-        "VALUES (?, ?, ?, ?, ?) "
-        "ON CONFLICT(user_id, role_id, key) DO UPDATE SET value=?, updated_at=?",
-        (user_id, role_id, key, value, now, value, now),
-    )
-    db.conn.commit()
+    db.set_knowledge(user_id, role_id, key, value)
 
 
 def delete_user_knowledge(user_id: int, role_id: str, key: str):
     """删除一条知识条目"""
-    db.conn.execute(
-        "DELETE FROM knowledge_graph WHERE user_id=? AND role_id=? AND key=?",
-        (user_id, role_id, key),
-    )
-    db.conn.commit()
+    db.delete_knowledge(user_id, role_id, key)
 
 
 def get_knowledge_context(user_id: int, role_id: str) -> str:

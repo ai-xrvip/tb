@@ -44,11 +44,12 @@ from handlers.payment import handle_paywall_callback
 from handlers.conversation import cmd_clear, cmd_export, cmd_reset, cmd_retry
 from handlers.yuanwei import get_yuanwei_conversation_handler, handle_yuanwei_callback
 from handlers.keepsake import get_keepsake_conversation_handler, handle_keepsake_callback
-from handlers.moments import send_moment_broadcast, MOMENTS_INTERVAL_MIN, MOMENTS_INTERVAL_MAX
 from handlers.testimonial import cmd_screenshot, cmd_post_testimonial
 
 # ── Shared shutdown flag ──
 _shutdown_flag = threading.Event()
+shutdown_event = asyncio.Event()
+_global_jobs_registered = False
 
 
 def validate_config() -> list[str]:
@@ -67,11 +68,14 @@ async def _rate_limit_check(update: Update, user_id: int, is_admin: bool) -> boo
         return True
     allowed = await check_rate_limit(user_id, is_admin)
     if not allowed:
-        await update.message.reply_text("🚀 消息太频繁啦，稍等一下再聊～")
+        msg = update.effective_message
+        if msg is not None:
+            await msg.reply_text("🚀 消息太频繁啦，稍等一下再聊～")
     return allowed
 
 
 def _wrap_handler(handler):
+    """Wrap CommandHandler, MessageHandler, or CallbackQueryHandler with rate limiting."""
     async def wrapped(update: Update, context):
         user = update.effective_user
         if user is None:
@@ -283,20 +287,15 @@ def build_single_bot(role_id: str, token: str) -> Application:
     # ── Error ──
     app.add_error_handler(error_handler)
 
-    # # ── Job Queue: moments ──
-    # import random as _rnd
-    # app.job_queue.run_repeating(
-    # lambda ctx: send_moment_broadcast(ctx),
-    # interval=_rnd.randint(MOMENTS_INTERVAL_MIN, MOMENTS_INTERVAL_MAX),
-    # first=60,
-    # name=f"moments_{role_id}",
-    # )
-
     return app
 
 
 def _register_global_jobs(app: Application):
     """Register global (once-per-process) tasks — cleanup, backup, deep dream."""
+    global _global_jobs_registered
+    if _global_jobs_registered:
+        return
+    _global_jobs_registered = True
     # -- Inactive user cleanup: daily --
     app.job_queue.run_repeating(
         lambda ctx: db.cleanup_inactive_users(180),
@@ -453,6 +452,7 @@ async def main():
         global _shutdown_flag  # kept for compat
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         _shutdown_flag.set()
+        shutdown_event.set()
 
     _signal.signal(_signal.SIGTERM, _handle_signal)
     _signal.signal(_signal.SIGINT, _handle_signal)
@@ -520,8 +520,7 @@ async def main():
     if not active_bots:
         logger.warning("No bot tokens configured — healthcheck only. Set *_BOT_TOKEN env vars in Railway.")
         # Keep the event loop alive so healthcheck server stays up
-        while not _shutdown_flag.is_set():
-            await asyncio.sleep(60)
+        await shutdown_event.wait()
         return
 
     if config.WEBHOOK_URL:
@@ -556,8 +555,7 @@ async def main():
 
         logger.info(f"All {len(apps)} bots running via webhook")
 
-        while not _shutdown_flag.is_set():
-            await asyncio.sleep(3600)
+        await shutdown_event.wait()
     else:
         # ── Polling mode ──
         tasks = [run_bot_polling(rid, tok, idx, len(active_bots)) for idx, (rid, tok) in enumerate(active_bots.items())]
@@ -581,21 +579,18 @@ async def run_bot_polling(role_id: str, token: str, bot_index: int = 0, total_bo
     await app.initialize()
     await app.start()
     logger.info(f"Polling started: {role['name']} ({role_id})")
-    await app.updater.start_polling(allowed_updates=["message", "callback_query"])
+    # Use run_polling pattern to avoid .updater deprecation
+    polling_task = asyncio.create_task(
+        app.updater.start_polling(allowed_updates=["message", "callback_query"])
+    )
     # Keep alive
-    while not _shutdown_flag.is_set():
-        await asyncio.sleep(60)
-    await app.updater.stop()
+    await shutdown_event.wait()
+    polling_task.cancel()
     await app.stop()
     await app.shutdown()
-
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
-
-
-
-

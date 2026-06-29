@@ -170,11 +170,11 @@ with gr.Blocks(css=CSS, title="AI GF Bot Admin") as demo:
 def start_admin_panel(port: int = 7860):
     """Start the admin panel"""
     logger.info("Admin panel starting on http://0.0.0.0:" + str(port))
-    demo.launch(
+    demo.queue(default_concurrency_limit=5).launch(
         server_name="0.0.0.0",
         server_port=port,
         share=False,
-        quiet=True,
+        show_error=True,
     )
 
 

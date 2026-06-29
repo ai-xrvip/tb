@@ -283,17 +283,15 @@ class Database:
             self.conn.commit()
 
     def deduct_free_count(self, user_id: int) -> bool:
+        """原子减一，无需先读取再写入"""
         with self.lock:
             try:
-                user = self.get_user(user_id)
-                if not user or user["free_count"] <= 0:
-                    return False
-                self.conn.execute(
-                    "UPDATE users SET free_count = free_count - 1 WHERE user_id = ?",
+                cur = self.conn.execute(
+                    "UPDATE users SET free_count = free_count - 1 WHERE user_id = ? AND free_count > 0",
                     (user_id,),
                 )
                 self.conn.commit()
-                return True
+                return cur.rowcount > 0
             except Exception:
                 logger.error(f"deduct error user_id={user_id}", exc_info=True)
                 return False
@@ -779,6 +777,34 @@ class Database:
                 "INSERT INTO user_last_message (user_id, last_message_at) VALUES (?, ?) "
                 "ON CONFLICT(user_id) DO UPDATE SET last_message_at = ?",
                 (user_id, now, now),
+            )
+            self.conn.commit()
+
+    # ── Knowledge Graph (thread-safe wrappers) ──
+    def get_knowledge(self, user_id: int, role_id: str) -> dict[str, str]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT key, value FROM knowledge_graph WHERE user_id=? AND role_id=?",
+                (user_id, role_id),
+            ).fetchall()
+            return {r["key"]: r["value"] for r in rows}
+
+    def set_knowledge(self, user_id: int, role_id: str, key: str, value: str):
+        with self.lock:
+            now = _time.time()
+            self.conn.execute(
+                "INSERT INTO knowledge_graph (user_id, role_id, key, value, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id, role_id, key) DO UPDATE SET value=?, updated_at=?",
+                (user_id, role_id, key, value, now, value, now),
+            )
+            self.conn.commit()
+
+    def delete_knowledge(self, user_id: int, role_id: str, key: str):
+        with self.lock:
+            self.conn.execute(
+                "DELETE FROM knowledge_graph WHERE user_id=? AND role_id=? AND key=?",
+                (user_id, role_id, key),
             )
             self.conn.commit()
 
