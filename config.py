@@ -58,6 +58,11 @@ class Config:
     IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "agnes-image-2.1-flash")
     IMAGE_GEN_SIZE: str = os.getenv("IMAGE_GEN_SIZE", "1024x1024")
 
+    # Reference image URL per role (set IMAGE_REF_{ROLE_ID} env var)
+    @classmethod
+    def get_image_ref(cls, role_id: str) -> str:
+        return os.getenv(f"IMAGE_REF_{role_id.upper()}", "")
+
     # 鈹€鈹€ 鍔ㄦ€佸姞杞芥墍鏈?Bot Token 鈹€鈹€
     BOT_TOKENS: dict[str, str] = _load_bot_tokens()
 

@@ -29,7 +29,7 @@ from utils.logger import logger
 from handlers.payment import send_paywall_card
 from handlers.yuanwei import try_trigger_yuanwei
 from handlers.keepsake import try_trigger_keepsake
-from media_tags import get_media_config, get_folder, get_tier, get_tags_for_role, get_max_tier_for_text
+from media_tags import get_tier, get_max_tier_for_text
 from providers.base import ProviderError, RateLimitError, TokenLimitError
 from relationship import get_mood_prompt, get_mood_for_user, get_relationship_prompt
 from environment import get_environment_context
@@ -197,92 +197,6 @@ def _get_conversation_rules(history_len: int) -> str:
             "3. 记住对方说过的重要信息"
         )
 
-
-# ── 媒体标签系统 ──
-# 由 media_tags.py 统一管理，支持全局标签 + 角色个性化标签
-# 每个标签定义：folder(从哪个文件夹取图) + tier(需要的解锁级别)
-# 别名支持：多个标签可指向同一个folder（重复利用图池）
-MEDIA_TAG_RE = re.compile(r'\[media:([^\]]+)\]')
-
-# ── 流式更新间隔（秒） ──
-STREAM_UPDATE_INTERVAL = 0.8
-# ── 流式累计最小字符数才更新 ──
-STREAM_MIN_CHARS = 20
-
-
-def _media_allowed(role_id: str, category: str, user_id: int) -> bool:
-    """检查用户是否有权限看该类媒体（从 media_tags 读取tier）"""
-    required_tier = get_tier(role_id, category)
-    if required_tier == 0:
-        return True
-    user_tier = db.get_unlock_tier(user_id, role_id)
-    return user_tier >= required_tier
-
-def _pick_media(role_id: str, tag: str, user_id: int) -> str | None:
-    """Pick a random image from a media folder. Supports tag + keyword fallback."""
-    import random
-    media_base = Path(__file__).parent.parent / "media"
-    role_dir = media_base / role_id
-    if not role_dir.exists():
-        return None
-    folder = get_folder(role_id, tag)
-    if not folder:
-        folder = _smart_folder_match(role_id, tag)
-    if not folder:
-        return None
-    folder_path = role_dir / folder
-    if not folder_path.exists():
-        return None
-    files = [p for p in folder_path.glob("*") if p.suffix.lower() in (".jpg",".jpeg",".png",".webp")]
-    if not files:
-        return None
-    return str(random.choice(files))
-
-
-def _smart_folder_match(role_id: str, text: str) -> str | None:
-    """Match conversation text to best available media folder by keyword scoring."""
-    media_base = Path(__file__).parent.parent / "media"
-    role_dir = media_base / role_id
-    text_lower = text.lower()
-    best_folder = None
-    best_score = 0
-    folder_keywords = {
-        "JK": ["jk", "制服", "校园", "学生", "校服"],
-        "Cos": ["cos", "cosplay", "角色", "扮演"],
-        "日常": ["日常", "生活", "普通", "居家"],
-        "穿搭": ["穿搭", "衣服", "搭配", "ootd", "look"],
-        "运动": ["运动", "健身", "跑步", "锻炼", "跑"],
-        "姿态": ["姿态", "动作", "姿势", "pose"],
-        "旅游": ["旅游", "旅行", "景点", "出门"],
-        "夜景": ["夜景", "夜晚", "晚上", "夜间"],
-        "起床": ["起床", "醒来", "早晨", "睡衣"],
-        "派对": ["派对", "聚会", "酒吧", "喝酒"],
-        "性感": ["性感", "诱惑", "迷人", "sexy"],
-        "泳装": ["泳装", "比基尼", "游泳"],
-        "沐浴": ["沐浴", "洗澡", "浴室", "浴缸"],
-        "情趣": ["情趣", "蕾丝", "睡衣", "内衣"],
-        "亲密": ["亲密", "拥抱", "接吻", "抱"],
-        "裸露": ["裸露", "裸", "不穿"],
-    }
-    for folder_name, keywords in folder_keywords.items():
-        score = sum(len(kw) for kw in keywords if kw in text_lower)
-        if score > best_score and (role_dir / folder_name).is_dir():
-            best_score = score
-            best_folder = folder_name
-    return best_folder
-
-
-def _pick_media_by_context(role_id: str, reply_text: str) -> str | None:
-    """Pick a relevant image based on what the AI said."""
-    import random
-    folder = _smart_folder_match(role_id, reply_text)
-    if folder:
-        media_base = Path(__file__).parent.parent / "media"
-        folder_path = media_base / role_id / folder
-        files = [p for p in folder_path.glob("*") if p.suffix.lower() in (".jpg",".jpeg",".png",".webp")]
-        if files:
-            return str(random.choice(files))
-    return None
 
 def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     """构建发送给 LLM 的消息列表（含世界书/记忆）"""
@@ -545,7 +459,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(_get_role_busy_message(role_id))
         return
 
-    clean_reply = MEDIA_TAG_RE.sub("", full_reply).strip()
+    clean_reply = full_reply.strip()
         # 计算对方回复间隔（秒），用于节奏适应
     user_resp_time = 999.0
     if prev_msg_time:
