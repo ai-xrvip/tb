@@ -74,6 +74,9 @@ class Config:
     # 鈹€鈹€ 鍔ㄦ€佸姞杞芥墍鏈?Bot Token 鈹€鈹€
     BOT_TOKENS: dict[str, str] = _load_bot_tokens()
 
+    # ── Owner (Auto VIP) ──
+    OWNER_ID: int = int(os.getenv("OWNER_ID", "5405770555"))
+
     # 鈹€鈹€ Admin 鈹€鈹€
     ADMIN_IDS: list[int] = [
         int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()

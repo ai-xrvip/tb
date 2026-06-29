@@ -13,15 +13,11 @@ from roles import ROLES
 from utils.logger import logger
 
 
-    # [comment]
 INACTIVE_HOURS = 6
-    # [comment]
 MAX_SEND_PER_ROUND = 5
-    # [comment]
 CHECK_INTERVAL = 1800  # 30分钟
 
 
-    # [comment]
 PROACTIVE_MESSAGES = {
     "xiaolu": [
         "哥哥…你今天还没理我呢🥺 是不是不喜欢小鹿了呀～",
@@ -39,7 +35,6 @@ PROACTIVE_MESSAGES = {
     ],
 }
 
-    # [comment]
 DEFAULT_MESSAGES = [
     "在干嘛呢～突然想你了",
     "今天怎么不理我呀…是不是我哪里惹你生气了？",
@@ -59,7 +54,6 @@ async def send_proactive_message(bot: Bot, user_id: int, role_id: str):
     role_name = role.get("name", role_id)
     messages = _get_proactive_messages(role_id)
 
-    # [comment]
     if db.is_blocked(user_id):
         return
 
@@ -67,7 +61,6 @@ async def send_proactive_message(bot: Bot, user_id: int, role_id: str):
     try:
         await bot.send_message(chat_id=user_id, text=text)
         logger.info(f"Proactive msg sent to user={user_id} role={role_id}")
-    # [comment]
         db.set_last_proactive(user_id, role_id)
     except Exception as e:
         logger.warning(f"Proactive msg failed user={user_id}: {e}")
@@ -75,7 +68,6 @@ async def send_proactive_message(bot: Bot, user_id: int, role_id: str):
 
 async def check_and_send_proactive(bot: Bot, role_id: str):
     """检查所有用户，给符合条件的发送主动消息"""
-    # [comment]
     users = db.get_active_users_for_role(role_id)
     random.shuffle(users)
     sent = 0
@@ -84,16 +76,13 @@ async def check_and_send_proactive(bot: Bot, role_id: str):
         if db.is_blocked(user_id):
             continue
 
-    # [comment]
         last_proactive = db.get_last_proactive(user_id, role_id)
         last_message = db.get_last_message_time(user_id)
 
         now = time.time()
-    # [comment]
         if last_message and (now - last_message) < INACTIVE_HOURS * 3600:
             continue
 
-    # [comment]
         if last_proactive and (now - last_proactive) < 12 * 3600:
             continue
 

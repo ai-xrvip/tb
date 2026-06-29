@@ -104,9 +104,10 @@ async def gift_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "name": gift_name,
         "money": str(gift_price),
     }
-    sign_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + _cfg.EPAY_KEY
-    params["sign"] = hashlib.sha256(sign_str.encode()).hexdigest()
-    params["sign_type"] = "SHA256"
+    # EPay 标准签名: k=v&k=v&key=SECRET
+    sign_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + "&key=" + _cfg.EPAY_KEY
+    params["sign"] = hashlib.md5(sign_str.encode()).hexdigest()
+    params["sign_type"] = "MD5"
     pay_url = f"{_cfg.EPAY_URL}?{urlencode(params)}"
 
     await query.edit_message_text(

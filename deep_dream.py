@@ -49,15 +49,7 @@ async def summarize_user_conversation(user_id: int, role_id: str):
         )
 
         if summary and len(summary) > 10:
-            import asyncio as _asyncio
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc).isoformat()
-            await _asyncio.to_thread(
-                db.conn.execute,
-                "INSERT INTO chat_summaries (user_id, summary_text, msg_count, created_at) VALUES (?, ?, ?, ?)",
-                (user_id, summary, len(recent), now),
-            )
-            await _asyncio.to_thread(db.conn.commit)
+            db.add_chat_summary(user_id, summary, len(recent))
             logger.info("Deep Dream summary for user=" + str(user_id) + ": " + summary[:100])
             return summary
 
@@ -69,11 +61,8 @@ async def summarize_user_conversation(user_id: int, role_id: str):
 
 def get_recent_summaries(user_id: int, role_id: str, days: int = 7):
     """Get summaries from the last N days for context injection"""
-    rows = db.conn.execute(
-        "SELECT summary_text FROM chat_summaries WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
-        (user_id, days),
-    ).fetchall()
-    return [r["summary_text"] for r in rows]
+    summaries = db.get_chat_summaries(user_id, days)
+    return [s["summary_text"] for s in summaries]
 
 
 def get_summary_context(user_id: int, role_id: str, max_summaries: int = 7):

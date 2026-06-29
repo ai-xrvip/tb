@@ -84,8 +84,37 @@ def _get_character_desc(role_id: str) -> str:
     """Get character description for video prompt."""
     _ROLE_CHARACTER = {
         "xiaolu": "cute young Asian woman, sweet smile, cosplayer, JK uniform, twin tails, soft makeup, fair skin, perfect hands, slender fingers",
+        "linxi": "beautiful Chinese woman, elegant professional, dark suit, high ponytail, sharp eyes, CEO aura, tall slender, fair skin, perfect hands",
+        "mia": "sporty Chinese-American woman, athletic build, ponytail, yoga wear, happy smile, muscular legs, abs, perfect hands",
+        "sunian": "graceful Chinese woman, gentle eyes, long wavy hair, linen dress, artistic temperament, slender figure, pale skin, perfect hands",
+        "yuki": "delicate Chinese girl, soft features, hanfu style, long straight black hair, porcelain skin, elegant posture, gentle smile, perfect hands",
+        "reina": "wealthy Japanese-Chinese young woman, designer clothes, luxury handbag, elegant jewelry, perfect makeup, tsundere look, perfect hands",
+        "chiyo": "gentle Chinese woman, apron over casual clothes, warm smile, slightly tired eyes, full figure, caring expression, perfect hands",
+        "nana": "fun Chinese girl, gaming headset, casual hoodie, short skirt, playful smile, colorful hair, energetic look, perfect hands",
+        "mizuki": "powerful Chinese CEO, sharp business suit, high heels, cold expression, elegant updo, intimidating aura, perfect hands",
+        "akari": "cute Chinese nurse, white uniform, gentle smile, natural makeup, round glasses, soft features, cute face, perfect hands",
+        "yuna": "tall Chinese fashion model, runway walk, designer clothes, perfect figure, long legs, elegant pose, high cheekbones, perfect hands",
+        "shiori": "introspective Chinese girl, glasses, book in hand, scholarly look, long braid, soft expression, vintage cardigan, perfect hands",
+        "sora": "elegant Chinese flight attendant, airline uniform, professional smile, perfect posture, gentle eyes, hair in bun, perfect hands",
+        "kaede": "strong Chinese policewoman, uniform, sharp eyes, athletic build, short hair, confident stance, perfect hands",
+        "ruri": "sharp Chinese lawyer, business suit, tote bag, confident expression, glasses, sleek bun, elegant heels, perfect hands",
+        "ren": "mysterious Chinese bartender, elegant black dress, cocktail shaker, smoky eyes, long hair, perfect hands",
+        "hana": "gentle Chinese florist, flower crown, linen apron, soft smile, tanned skin, natural look, perfect hands",
+        "mai": "elegant Chinese ballet dancer, leotard, tutu, pointe shoes, graceful posture, delicate features, perfect hands",
+        "momo": "sweet Taiwanese dessert chef, cute apron, flour on cheek, big eyes, short hair, happy expression, perfect hands",
+        "sakura": "gentle Chinese veterinarian, white coat, stethoscope, warm smile, soft eyes, caring hands, perfect hands",
+        "aya": "efficient Chinese secretary, office suit, glasses, smart bun, typing pose, professional smile, perfect hands",
+        "mei": "creative Chinese musician, guitar, bohemian dress, artistic look, messy bun, creative expression, perfect hands",
+        "koharu": "adventurous Chinese photographer, camera around neck, rugged boots, sun-kissed skin, free spirit, perfect hands",
+        "tsubaki": "determined Chinese journalist, trench coat, notepad, determined eyes, urban professional, perfect hands",
+        "rio": "cool Chinese female racer, racing suit, helmet under arm, lean athletic build, focused eyes, perfect hands",
+        "nozomi": "cute Chinese voice actress, microphone, headphones, cosplay accessories, expressive face, perfect hands",
+        "nami": "free-spirited Chinese surfer girl, wetsuit, surfboard, tan skin, wet hair, strong arms, perfect hands",
+        "fumi": "quiet Chinese librarian, vintage cardigan, glasses, serene expression, soft features, perfect hands",
+        "eri": "smart Chinese AI researcher, hoodie, glasses, messy ponytail, focused expression, perfect hands",
+        "yui": "cute Chinese maid cafe girl, maid uniform, cat ears, coffee tray, bright smile, perfect hands",
     }
-    return _ROLE_CHARACTER.get(role_id, "beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup")
+    return _ROLE_CHARACTER.get(role_id, "beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup, perfect hands")
 
 
 def _build_video_prompt(text: str, role_id: str = "") -> str:

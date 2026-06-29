@@ -1,17 +1,42 @@
+# ── Environment ──
 .env
-.env.template
-__pycache__/
-*.pyc
-bot.db
-.gitkeep
-.DS_Store
-railway.env
-tmp/
-outputs/
-logs/
+.env.*
+!.env.example
+!.env.template
 
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ── Database ──
+*.db
+*.db-*
 backups/
 
+# ── Logs ──
+logs/
+*.log
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Temporary ──
+tmp/
+outputs/
+
+# ── Railway ──
+railway.env
 
 # Reference photos (kept in refs/ for CDN, ignore local media copies)
-media/*/�ο�ͼ/
+media/*/参考图/

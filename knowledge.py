@@ -13,8 +13,6 @@ from database import db
 from utils.logger import logger
 
 
-# 知识图谱存储表（通过 database.py 的 _init_tables 创建，这里只提供接口）
-
 def get_user_knowledge(user_id: int, role_id: str) -> dict[str, str]:
     """获取用户的所有知识条目，返回 {key: value}"""
     rows = db.conn.execute(
@@ -82,17 +80,14 @@ async def extract_knowledge_from_conversation(
     messages: list[dict],
 ) -> list[dict]:
     """从对话中提取新知识（通过 LLM）"""
-    # 取最近的对话（最多10轮）
     recent = messages[-20:] if len(messages) > 20 else messages
     if len(recent) < 2:
         return []
 
-    # 构建对话文本
     conv_text = "\n".join(
         f"{'用户' if m['role'] == 'user' else 'AI'}: {m['content']}"
         for m in recent
     )
-    # 截断过长文本
     if len(conv_text) > 2000:
         conv_text = conv_text[-2000:]
 
@@ -109,7 +104,6 @@ async def extract_knowledge_from_conversation(
             temperature=0.1,
         )
 
-        # 解析 JSON 行
         facts = []
         for line in response.strip().split("\n"):
             line = line.strip()
@@ -122,7 +116,6 @@ async def extract_knowledge_from_conversation(
             except json.JSONDecodeError:
                 continue
 
-        # 存储提取到的知识
         for fact in facts:
             set_user_knowledge(user_id, role_id, fact["key"], fact["value"])
 
@@ -138,7 +131,6 @@ async def extract_knowledge_from_conversation(
 
 # ── 简洁版：基于规则的知识提取 ──
 
-# 常见的关键词触发模式
 KNOWLEDGE_PATTERNS = {
     "我叫": "名字",
     "我是": "身份",
@@ -168,10 +160,8 @@ def extract_knowledge_simple(user_id: int, role_id: str, user_text: str):
     stored = 0
     for pattern, key_name in KNOWLEDGE_PATTERNS.items():
         if pattern in user_text:
-            # 提取 pattern 之后到第一个标点的内容
             idx = user_text.find(pattern) + len(pattern)
             rest = user_text[idx:]
-            # 截断到标点或10个字
             value = ""
             for ch in rest:
                 if ch in "，。！？、；,.;!? \t\n":

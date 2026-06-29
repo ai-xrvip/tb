@@ -206,9 +206,10 @@ async def handle_paywall_callback(update: Update, context: ContextTypes.DEFAULT_
             "name": pw["item_name"],
             "money": str(pw["price"]),
         }
-        sign_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + config.EPAY_KEY
-        params["sign"] = hashlib.sha256(sign_str.encode()).hexdigest()
-        params["sign_type"] = "SHA256"
+        # EPay 标准签名: k=v&k=v&key=SECRET
+        sign_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + "&key=" + config.EPAY_KEY
+        params["sign"] = hashlib.md5(sign_str.encode()).hexdigest()
+        params["sign_type"] = "MD5"
         pay_url = f"{config.EPAY_URL}?{urlencode(params)}"
 
         new_text = (

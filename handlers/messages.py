@@ -444,7 +444,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     user_name = user.first_name or "用户"
-    user_text = update.message.text.strip()
+    # Check if voice transcribed text is available (from voice.py, safe injection-free approach)
+    voice_text = context.user_data.pop("pending_voice_text", None)
+    user_text = voice_text if voice_text else update.message.text.strip()
 
     db.create_user(user_id)
     user_data = db.get_user(user_id)
@@ -640,9 +642,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         db.increment_message_count(user_id)
-        new_total = (user_data.get("total_messages", 0) or 0) + 1
+        # 从数据库重新读取最新计数，避免使用快照导致偏差
+        new_total = db.get_total_messages(user_id)
         next_paywall = get_current_paywall(role_id, new_total, unlock_tier)
         if next_paywall:
+            # 仅在付费门槛第一次触发时发卡（当前还未解锁）
             await send_paywall_card(update, user_id, role_id, new_total)
         await try_trigger_yuanwei(update, user_id, role_id, new_total)
         await try_trigger_keepsake(update, user_id, role_id, new_total)
@@ -651,6 +655,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Post-reply error: {e}")
 
 
+
+
+async def process_voice_text(update: Update, context: ContextTypes.DEFAULT_TYPE, voice_text: str):
+    """Handle voice transcribed text safely (called from voice.py, no __setattr__ needed)."""
+    user = update.effective_user
+    user_id = user.id
+    db.create_user(user_id)
+    role_id = context.bot_data.get("role_id", "xiaolu")
+
+    # Create a synthetic message so handle_message can process it
+    original_text = update.message.text
+    try:
+        # Temporarily set the text via context dictionary instead of modifying frozen Message
+        context.user_data["pending_voice_text"] = voice_text
+        # Call the same handler - it will read from context if available
+        await handle_message(update, context)
+    finally:
+        context.user_data.pop("pending_voice_text", None)
 
 
 async def handle_media_message(update: Update, context: ContextTypes.DEFAULT_TYPE):

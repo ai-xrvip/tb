@@ -171,7 +171,7 @@ async def generate_role_voice(
     text: str, role_id: str, role: dict = None, trigger_rate: float = None
 ) -> Optional[bytes]:
     if trigger_rate is None:
-        trigger_rate = TTS_TRIGGER_RATE
+        trigger_rate = config.TTS_TRIGGER_RATE
     if random.random() > trigger_rate:
         return None
     voice_text = _clean_tts_text(text)[:config.TTS_MAX_CHARS]

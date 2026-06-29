@@ -502,7 +502,7 @@ async def main():
     # ── Active bots ──
     active_bots = config.get_active_bots()
         # ── Auto VIP: owner always max tier ──
-    OWNER_ID = int(os.environ.get("OWNER_ID", "5405770555"))
+    OWNER_ID = config.OWNER_ID
 
     try:
         db.create_user(OWNER_ID)

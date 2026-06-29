@@ -163,9 +163,10 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if text:
             logger.info(f"Voice -> text: [{text[:100]}]")
-            object.__setattr__(msg, 'text', text)  # bypass frozen Message
-            from handlers.messages import handle_message
-            await handle_message(update, context)
+            # Store transcribed text in context, safe way (no __setattr__ injection)
+            context.user_data["voice_text"] = text
+            from handlers.messages import process_voice_text
+            await process_voice_text(update, context, text)
         else:
             logger.warning(f"Voice transcribe returned None for user={user_id}")
             await update.message.reply_text(_get_stt_error(role_id))
