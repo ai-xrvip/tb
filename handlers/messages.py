@@ -394,30 +394,29 @@ async def _generate_and_send(update, reply_text, role_id, role_name):
         logger.error(f"img2img failed: {e}")
 
 
-async def _generate_and_send_video(update, reply_text, role_id, role_name):
-    """Generate and send a video, then the text reply after."""
+async def _generate_and_send_video(update, reply_text, role_id, role_name, sent_msg=None):
+    """Generate and send a video as reply to the text message."""
     status_msg = None
     video_sent = False
     try:
-        status_msg = await update.message.reply_text("🎬 ????????????1-2????")
+        status_msg = await update.message.reply_text("Generating video, 1-2 minutes...")
         video_data = await generate_video(reply_text, role_id)
         if video_data and len(video_data) > 1000:
             await status_msg.delete()
-            await update.message.reply_video(video_data)
-            await update.message.reply_text(reply_text)
+            target = sent_msg or update.message
+            await target.reply_video(video_data)
             video_sent = True
         else:
-            await status_msg.edit_text(reply_text if reply_text else "😢 ??????????????")
+            await status_msg.edit_text("Video gen returned empty, sorry!")
     except Exception as e:
         logger.error(f"Video gen failed: {e}")
         try:
             if status_msg:
-                await status_msg.edit_text(reply_text if reply_text else "😢 ????????")
-            else:
-                await update.message.reply_text(reply_text)
+                await status_msg.delete()
         except Exception:
             pass
     return video_sent
+
 
 async def _pregenerate_photo(update, user_id, reply_text, role_id, role_name, pending_dict):
     """Pre-generate photo in background, store for next user confirmation."""
@@ -531,54 +530,74 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.debug(f"Non-critical: {e}")
     # delay disabled per user request
     # await asyncio.sleep(delay)
+    # ?? ???????? ??
+    sent_msg = None
+    if clean_reply:
+        sent_msg = await update.message.reply_text(clean_reply)
 
-    # -- TTS voice: random probability OR user explicitly requests voice --
-    voice_request_keywords = ["说句话", "发语音", "听听你的声音", "你的声音", "说话听听", "说句话听听", "语音", "声音好听", "想听你说话"]
-    user_requests_voice = any(kw in user_text for kw in voice_request_keywords)
-    voice_trigger_rate = 1.0 if user_requests_voice else config.TTS_TRIGGER_RATE
+    # ?? ???? TTS ?? + ??/???? ??
+    voice_task = None
+    image_task = None
+    video_task = None
 
-    voice_sent = False
-    if config.TTS_ENABLED and clean_reply and generate_role_voice:
+    # TTS voice task
+    if generate_role_voice and config.TTS_ENABLED and not voice_sent:
         try:
-            voice_data = await generate_role_voice(
-                clean_reply, role_id, role,
-                trigger_rate=voice_trigger_rate,
+            voice_trigger_rate = 1.0 if user_requests_voice else config.TTS_TRIGGER_RATE
+            voice_task = asyncio.create_task(
+                generate_role_voice(
+                    voice_text=clean_reply,
+                    role_id=role_id,
+                    trigger_rate=voice_trigger_rate,
+                )
             )
+        except Exception:
+            pass
+
+    # Media gen task (video or image)
+    if sent_msg and clean_reply and len(clean_reply) > 5:
+        required_tier = get_max_tier_for_text(role_id, clean_reply)
+        if unlock_tier >= required_tier:
+            motion_keywords = [
+                "??", "?", "?", "??", "??", "??", "???",
+                "??", "?", "?", "?", "?", "?", "?", "?",
+                "???", "???", "????", "??", "?",
+                "??", "??", "??",
+            ]
+            wants_video = any(kw in clean_reply for kw in motion_keywords)
+            if wants_video and config.VIDEO_GEN_ENABLED and generate_video:
+                video_task = asyncio.create_task(
+                    _generate_and_send_video(update, clean_reply, role_id, role_name, sent_msg)
+                )
+            elif config.IMAGE_GEN_ENABLED and generate_image:
+                async def _gen_and_reply():
+                    img_data = await generate_image(clean_reply, role_id)
+                    if img_data and len(img_data) > 500 and sent_msg:
+                        await sent_msg.reply_photo(img_data)
+                image_task = asyncio.create_task(_gen_and_reply())
+
+    # Wait for concurrent tasks
+    if voice_task:
+        try:
+            voice_data = await voice_task
             if voice_data:
-                await update.message.reply_voice(voice_data)
-                voice_sent = True
+                target = sent_msg or update.message
+                await target.reply_voice(voice_data)
         except Exception as tts_err:
             logger.error(f"TTS failed for {role_id}: {tts_err}")
 
-    # 始终先发送文字回复
-    if clean_reply:
-        await update.message.reply_text(clean_reply)
+    if image_task:
+        try:
+            await image_task
+        except Exception as e:
+            logger.error(f"Image gen error: {e}")
 
-    # 尝试补充媒体（视频/图片），失败时静默处理，不打扰用户
-    if clean_reply and len(clean_reply) > 5:
-        required_tier = get_max_tier_for_text(role_id, clean_reply)
-        if unlock_tier >= required_tier:
-            # Decide video vs image based on motion cues in reply
-            motion_keywords = [
-                "跳舞", "走", "跑", "挥手", "回眸", "转身", "撩头发",
-                "吹风", "飘", "甩", "跳", "蹦", "扭", "摇", "晃",
-                "走过来", "跑过来", "蹦蹦跳跳", "转圈", "舞",
-                "动态", "动图", "视频",
-            ]
-            wants_video = any(kw in clean_reply for kw in motion_keywords)
+    if video_task:
+        try:
+            await video_task
+        except Exception as e:
+            logger.error(f"Video gen error: {e}")
 
-            if wants_video and config.VIDEO_GEN_ENABLED and generate_video:
-                try:
-                    await _generate_and_send_video(update, clean_reply, role_id, role_name)
-                except Exception as e:
-                    logger.error(f"Video gen error: {e}")
-            elif config.IMAGE_GEN_ENABLED and generate_image:
-                try:
-                    img_data = await generate_image(clean_reply, role_id)
-                    if img_data and len(img_data) > 500:
-                        await update.message.reply_photo(img_data)
-                except Exception as e:
-                    logger.error(f"Image gen error: {e}")
     if clean_reply:
         # Mood-aware sticker injection
         try:
