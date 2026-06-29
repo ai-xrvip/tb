@@ -371,9 +371,16 @@ async def _check_and_summarize(user_id: int):
         logger.error(f"summarize failed user_id={user_id}: {e}")
 
 
-async def _get_provider_for_role(role_id: str):
-    """根据角色配置获取 LLM 提供商"""
-    from providers.factory import get_provider_from_config
+async def _get_provider_for_role(role_id: str, user_id: int = 0):
+    """???????? LLM ??????????? OpenRouter ?????"""
+    from providers.factory import get_provider_from_config, get_provider, ProviderType
+    if user_id and db.get_erotic_mode(user_id) and config.EROTIC_API_KEY:
+        return get_provider(
+            ProviderType.OPENAI,
+            api_key=config.EROTIC_API_KEY,
+            base_url=config.EROTIC_BASE_URL,
+            model=config.EROTIC_MODEL,
+        )
     return get_provider_from_config()
 
 
@@ -480,7 +487,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
 
     try:
-        provider = await _get_provider_for_role(role_id)
+        provider = await _get_provider_for_role(role_id, user_id)
         if config.ENABLE_STREAMING:
             full_reply = ""
             async for token in provider.chat_stream(
