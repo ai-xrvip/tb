@@ -435,6 +435,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = db.get_user(user_id)
     role_id = context.bot_data.get("role_id", "xiaolu")
     role = get_role(role_id)
+    role_name = role.get("name", role_id) if role else role_id
 
     # 获取上次消息时间（用于计算对方回复速度）
     prev_msg_time = None
@@ -506,7 +507,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     clean_reply = full_reply.strip()
-        # 计算对方回复间隔（秒），用于节奏适应
+    # ── 清理 AI 回复中的 [media:xxx] 标签（不管有没有实际图片都移除）──
+    import re as _re_media
+    clean_reply = _re_media.sub(r'\[media:[^\]]+\]', '', clean_reply).strip()
+
+    # 计算对方回复间隔（秒），用于节奏适应
     user_resp_time = 999.0
     if prev_msg_time:
         user_resp_time = _time.time() - prev_msg_time
@@ -538,9 +543,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as tts_err:
             logger.error(f"TTS failed for {role_id}: {tts_err}")
 
-    # -- Auto media generation: AI reply text -> prompt, auto decide image or video --
-    # Always try to generate when reply has content; negative prompts handle quality in API
+    # 始终先发送文字回复
+    if clean_reply:
+        await update.message.reply_text(clean_reply)
 
+    # 尝试补充媒体（视频/图片），失败时静默处理，不打扰用户
     if clean_reply and len(clean_reply) > 5:
         required_tier = get_max_tier_for_text(role_id, clean_reply)
         if unlock_tier >= required_tier:
@@ -555,9 +562,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if wants_video and config.VIDEO_GEN_ENABLED and generate_video:
                 try:
-                    video_sent_flag = await _generate_and_send_video(update, clean_reply, role_id, role_name)
-                    if video_sent_flag:
-                        voice_sent = True
+                    await _generate_and_send_video(update, clean_reply, role_id, role_name)
                 except Exception as e:
                     logger.error(f"Video gen error: {e}")
             elif config.IMAGE_GEN_ENABLED and generate_image:
@@ -568,8 +573,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"Image gen error: {e}")
     if clean_reply:
-        if not voice_sent:
-            await update.message.reply_text(clean_reply)
+        await update.message.reply_text(clean_reply)
 
         # Mood-aware sticker injection
         try:
