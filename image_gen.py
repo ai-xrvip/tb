@@ -72,15 +72,12 @@ _COMPOSITIONS = [
 
 
 
-def _build_visual_prompt(text: str, role_id: str = "") -> str:
-    """Build img2img prompt focused on identity preservation."""
-    text = text.strip()[:400]
-    # ??? [IMG] ??
-    text = text.replace("[IMG]", "").strip()
-    identity = "same person as reference photo, wearing cosplay outfit, detailed costume, cosplay photography"
-    quality = "photorealistic, soft natural lighting, varied poses, mix of close-up and full-body shots, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece"
-    return identity + ", " + quality + " -- scene: " + text
 
+def _build_visual_prompt(text: str, role_id: str = "") -> str:
+    """Build img2img prompt. Reference handles identity, AI text describes the scene."""
+    text = text.strip()[:400]
+    quality = "same person as reference photo, photorealistic, 8k, masterpiece, soft lighting, perfect hands"
+    return quality + " -- scene: " + text
 
 async def generate_image(prompt: str, role_id: str = "", page_url: str = "") -> bytes | None:
     """Generate via Agnes img2img only. Requires reference image URL."""
