@@ -1,4 +1,4 @@
-"""
+﻿"""
 TTS — Azure TTS (primary) + Edge TTS (fallback)
 SSML with mood-aware express-as, prosody, and natural pauses.
 Emoji/kaomoji stripped before synthesis so they are never spoken aloud.
@@ -169,7 +169,7 @@ async def generate_role_voice(
     if random.random() > trigger_rate:
         return None
     voice_text = _clean_tts_text(text)[:config.TTS_MAX_CHARS]
-    if len(voice_text) < 10:
+    if len(voice_text) < 1:
         return None
     voice = get_voice_for_role(role_id, role)
     if config.TTS_PROVIDER == "azure" and config.AZURE_SPEECH_KEY:
