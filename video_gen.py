@@ -6,7 +6,7 @@ from config import config
 from utils.logger import logger
 from utils.web_scrape import pick_random_ref
 
-VIDEO_GEN_TIMEOUT = 120
+VIDEO_GEN_TIMEOUT = 300
 _VIDEO_COMPOSITIONS = [
     "gentle smile and wave, soft breeze blowing hair, natural light, cinematic slow motion",
     "walking towards camera, confident stride, city background, golden hour lighting, smooth camera",
