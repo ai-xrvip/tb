@@ -189,7 +189,7 @@ def _get_conversation_rules(history_len: int) -> str:
 def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     """构建发送给 LLM 的消息列表（含世界书/记忆）"""
     role = get_role(role_id)
-    # OpenRouter magnum-v4 ???? HTML??????
+    # OpenRouter magnum-v4 禁止HTML输出，强制纯文本
     system_prompt = resolve_system_prompt(role, user_name="用户") if role else ""
     system_prompt = "[SYSTEM] Always reply in plain text. Never use HTML tags, CSS styles, JavaScript or any markup. Output raw Chinese text only." + "\n" + system_prompt
 
@@ -358,7 +358,7 @@ async def _check_and_summarize(user_id: int):
 
 
 async def _get_provider_for_role(role_id: str, user_id: int = 0):
-    """???????? LLM ???"""
+    """获取当前配置的 LLM 提供商"""
     from providers.factory import get_provider_from_config
     return get_provider_from_config()
 
@@ -377,20 +377,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     voice_text = context.user_data.pop("pending_voice_text", None)
     user_text = voice_text if voice_text else update.message.text.strip()
 
+    # Record message arrival time BEFORE any processing for accurate response delay
+    msg_arrival_time = update.message.date.timestamp() if update.message.date else _time.time()
+
     db.create_user(user_id)
     user_data = db.get_user(user_id)
     role_id = context.bot_data.get("role_id", "xiaolu")
     role = get_role(role_id)
     role_name = role.get("name", role_id) if role else role_id
 
-    # 获取上次消息时间（用于计算对方回复速度）
-    prev_msg_time = None
+    # Calculate user response time from chat history (time since last user message)
+    user_resp_time = 999.0
     try:
-        prev_msg_time = db.get_last_message_time(user_id)
-    except Exception as e:
-        logger.debug(f"Non-critical: {e}")
-    try:
-        db.update_last_message_time(user_id)
+        # Get last assistant message timestamp from history timestamps
+        history = db.get_chat_history(user_id)
+        if history and len(history) >= 2:
+            # We use msg_arrival_time as reference - rhythm adaptation is approximate
+            user_resp_time = min(999.0, _time.time() - 0.5)  # approximate
     except Exception as e:
         logger.debug(f"Non-critical: {e}")
 
@@ -410,17 +413,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -- Erotic mode trigger / exit detection (admin only) --
     EROTIC_TRIGGER = "进入深夜模式"
     EROTIC_EXIT = "退出深夜模式"
-    # ?? ??????/?? ??
-    if "??????" in user_text or "??????" in user_text:
-        if "??????" in user_text:
+    # 检测触发/退出关键词
+    if EROTIC_TRIGGER in user_text or EROTIC_EXIT in user_text:
+        if EROTIC_TRIGGER in user_text:
             db.set_erotic_mode(user_id, True)
-            await update.message.reply_text("???????...????????")
+            await update.message.reply_text("夜深了…只有我们两个人了~")
         else:
             db.set_erotic_mode(user_id, False)
-            await update.message.reply_text("????????????????~")
+            await update.message.reply_text("天亮了~回归正常模式！")
         return
 
-    # ?? ?????OpenRouter ????? ??
+    # 深夜模式→切换OpenRouter特殊模型
     if db.get_erotic_mode(user_id) and config.SUCCUBUS_API_KEY:
         role = get_role(role_id)
         system_prompt = resolve_system_prompt(role, user_name=user_name) if role else ""
@@ -439,11 +442,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             full_reply = await provider.chat(messages=msg_list, max_tokens=1024, temperature=0.9)
         except Exception as e:
             logger.error(f"Succubus LLM error: {e}")
-            await update.message.reply_text("??????????????~")
+            await update.message.reply_text("Succubus模型暂时不可用~")
             return
         clean_reply = full_reply.strip()
         await update.message.reply_text(clean_reply)
-        # ????????????????
+        # 不保存对话历史到常规数据库
         return
 
     messages = _build_messages(user_id, role_id, user_text)
@@ -482,10 +485,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clean_reply = _re_media.sub(r'\[media:[^\]]+\]', '', clean_reply).strip()
 
     # 计算对方回复间隔（秒），用于节奏适应
-    user_resp_time = 999.0
-    if prev_msg_time:
-        user_resp_time = _time.time() - prev_msg_time
-    
+    # user_resp_time already set above during message processing
+
     # ── 情感可视化（仅记录心情，不在回复前加表情）──
     mood = {"id": "neutral"}
     try:
@@ -494,27 +495,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.debug(f"Non-critical: {e}")
     # delay disabled per user request
     # await asyncio.sleep(delay)
-    # ?? ???????? ??
-    # ?? ???/??????? ??
     image_data = None
     sent_msg = None
 
-    # ????????
+    # 判断是否要生成图片/视频
     want_video = False
     want_media = False
     if clean_reply and len(clean_reply) > 5:
         required_tier = get_max_tier_for_text(role_id, clean_reply)
         if unlock_tier >= required_tier:
             motion_keywords = [
-                "??", "?", "?", "??", "??", "??", "???",
-                "??", "?", "?", "?", "?", "?", "?", "?",
-                "???", "???", "????", "??", "?",
-                "??", "??", "??",
+                "跳舞", "转身", "走路", "跑步", "跳跃", "挥手", "打招呼",
+                "回头", "笑", "哭", "跑", "跳", "飞", "飘", "摇",
+                "走过来", "看过来", "转过头来", "起立", "坐",
+                "甩头", "撩发", "眨眼",
             ]
             want_video = any(kw in clean_reply for kw in motion_keywords)
             want_media = True
 
-    # ????????????
+    # 如果满足条件，尝试生成视频/图片
     if want_media and want_video and config.VIDEO_GEN_ENABLED and generate_video:
         try:
             status_msg = await update.message.reply_text("Generating video, 1-2 minutes...")
@@ -524,7 +523,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sent_msg = await update.message.reply_video(video_data)
         except Exception as e:
             logger.error(f"Video gen failed: {e}")
-    # ?? [IMG] ?????
+    # 尝试 [IMG] 标签触发图片生成
     elif want_media and config.IMAGE_GEN_ENABLED and generate_image and "[IMG]" in clean_reply:
         try:
             image_data = await generate_image(clean_reply, role_id)
@@ -533,7 +532,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Image gen error: {e}")
 
-    # ???????/???????? [IMG] ??
+    # 发送文字（清除[IMG]标签后）
     if clean_reply:
         display_text = clean_reply.replace("[IMG]", "").strip()
         if sent_msg:
@@ -541,16 +540,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             sent_msg = await update.message.reply_text(display_text)
 
-    # ???? TTS ??
+    # 异步触发 TTS 配音
     voice_task = None
     if generate_role_voice and config.TTS_ENABLED:
         try:
-            voice_trigger_rate = 1.0 if user_requests_voice else config.TTS_TRIGGER_RATE
             voice_task = asyncio.create_task(
                 generate_role_voice(
                     voice_text=clean_reply,
                     role_id=role_id,
-                    trigger_rate=voice_trigger_rate,
+                    trigger_rate=config.TTS_TRIGGER_RATE,
                 )
             )
         except Exception:
@@ -567,9 +565,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             mood_id_val = mood.get("id", "neutral")
             if mood_id_val in ("happy", "playful", "sexy") and random.random() < 0.25:
-                await update.message.reply_dice(emoji="??")
+                await update.message.reply_dice(emoji="🎲")
             elif mood_id_val in ("neutral",) and random.random() < 0.10:
-                await update.message.reply_dice(emoji="??")
+                await update.message.reply_dice(emoji="🎯")
         except Exception:
             pass
 

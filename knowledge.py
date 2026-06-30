@@ -141,12 +141,21 @@ KNOWLEDGE_PATTERNS = {
 
 
 def extract_knowledge_simple(user_id: int, role_id: str, user_text: str):
-    """基于规则的简单知识提取（不调用 LLM）"""
+    """基于规则的简单知识提取（不调用 LLM）
+    注意：会跳过否定句（"不"在关键词前的匹配），防止「我不喜欢」被误存为「喜欢」。
+    """
     stored = 0
     for pattern, key_name in KNOWLEDGE_PATTERNS.items():
         if pattern in user_text:
-            idx = user_text.find(pattern) + len(pattern)
-            rest = user_text[idx:]
+            # Check for negation: "不" or "没" before the pattern
+            idx = user_text.find(pattern)
+            if idx > 0:
+                prefix = user_text[idx - 2:idx]
+                if "不" in prefix or "没" in prefix:
+                    continue  # skip negative statements like "我不喜欢"
+
+            content_start = idx + len(pattern)
+            rest = user_text[content_start:]
             value = ""
             for ch in rest:
                 if ch in "，。！？、；,.;!? \t\n":

@@ -4,10 +4,9 @@ import base64, json, os, random, re, time, urllib.parse
 import httpx
 from config import config
 from utils.logger import logger
+from utils.web_scrape import pick_random_ref as _pick_ref
 
 GEN_TIMEOUT = 120
-_REF_CACHE = {}
-_CACHE_TTL = 600
 
 NEGATIVE_PROMPT = (
     "bad hands, ugly hands, missing fingers, extra fingers, fused fingers, "
@@ -20,7 +19,7 @@ NEGATIVE_PROMPT = (
     "poorly drawn feet, bad feet, extra toes, missing toes"
 )
 
-_ROLE_CHARACTER = {
+_ROLE_CHARACTER_V2 = {
     "xiaolu": "cute young Asian woman, sweet smile, cosplayer, JK uniform, twin tails, soft makeup, fair skin, perfect hands, slender fingers",
     "linxi": "beautiful Chinese woman, elegant and professional, dark suit, high ponytail, sharp eyes, CEO aura, tall and slender, fair skin, perfect hands",
     "mia": "sporty Chinese-American woman, athletic build, ponytail, yoga wear, happy smile, muscular legs, abs, perfect hands, fit body",
@@ -53,6 +52,9 @@ _ROLE_CHARACTER = {
     "yui": "cute Chinese maid cafe girl, maid uniform, cat ears, holding coffee tray, bright smile, bow in hair, perfect hands",
 }
 
+# For backward compatibility, reference the shared dict
+_ROLE_CHARACTER = _ROLE_CHARACTER_V2
+
 _COMPOSITIONS = [
     "full body shot, standing pose, dynamic posture, detailed outfit, wide angle lens, environmental background, city street",
     "medium shot, waist up, natural pose, soft smile, bokeh background, outdoor cafe",
@@ -68,47 +70,6 @@ _COMPOSITIONS = [
     "wide environmental portrait, small figure in frame, atmospheric, storytelling composition",
 ]
 
-
-async def _scrape_page(page_url: str) -> list:
-    """Scrape image URLs from a page (telegra.ph etc). Results cached for 10 min."""
-    now = time.time()
-    if page_url in _REF_CACHE:
-        ts, urls = _REF_CACHE[page_url]
-        if now - ts < _CACHE_TTL and urls:
-            return urls
-    try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.get(page_url, headers={"User-Agent": "Bot/1.0"})
-            if resp.status_code != 200:
-                return []
-            html = resp.text
-    except Exception:
-        return []
-
-    img_urls = re.findall(r'<img[^>]+src="([^"]+)"', html, re.IGNORECASE)
-    img_urls += re.findall(r'!\[.*?\]\(([^)]+)\)', html)
-
-    parsed = urllib.parse.urlparse(page_url)
-    base = f"{parsed.scheme}://{parsed.hostname}"
-    resolved = []
-    for u in img_urls:
-        if u.startswith("/"): u = base + u
-        elif u.startswith("//"): u = "https:" + u
-        elif u.startswith("data:"): continue
-        elif not u.startswith("http"): u = urllib.parse.urljoin(page_url, u)
-        resolved.append(u)
-        if len(resolved) >= 30:
-            break
-
-    _REF_CACHE[page_url] = (now, resolved)
-    logger.info(f"Scraped {len(resolved)} images from {page_url[:60]}...")
-    return resolved
-
-
-async def _pick_ref(page_url: str) -> str | None:
-    """Scrape page and return a random image URL as reference."""
-    urls = await _scrape_page(page_url)
-    return random.choice(urls) if urls else None
 
 
 def _build_visual_prompt(text: str, role_id: str = "") -> str:

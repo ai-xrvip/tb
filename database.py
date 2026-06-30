@@ -117,7 +117,8 @@ class Database:
                         free_count     INTEGER DEFAULT 20,
                         vip_expire     TEXT,
                         total_messages INTEGER DEFAULT 0,
-                        erotic_mode    INTEGER DEFAULT 0
+                        erotic_mode    INTEGER DEFAULT 0,
+                        created_at     TEXT DEFAULT (datetime('now'))
                     );
 
                     CREATE TABLE IF NOT EXISTS blocked_users (
@@ -294,6 +295,12 @@ class Database:
                 # Migration: add erotic_mode column if missing
                 try:
                     c.execute("ALTER TABLE users ADD COLUMN erotic_mode INTEGER DEFAULT 0")
+                except Exception:
+                    pass  # column already exists
+
+                # Migration: add created_at column if missing
+                try:
+                    c.execute("ALTER TABLE users ADD COLUMN created_at TEXT DEFAULT (datetime('now'))")
                 except Exception:
                     pass  # column already exists
 
@@ -755,7 +762,11 @@ class Database:
 
     def get_active_users_for_role(self, role_id: str) -> list[int]:
         with self.lock:
-            rows = self.conn.execute("SELECT DISTINCT user_id FROM chat_history").fetchall()
+            rows = self.conn.execute(
+                "SELECT DISTINCT ch.user_id FROM chat_history ch "
+                "JOIN users u ON u.user_id = ch.user_id "
+                "WHERE u.current_role = ?", (role_id,)
+            ).fetchall()
             return [r["user_id"] for r in rows]
 
     def get_last_proactive(self, user_id: int, role_id: str) -> float | None:

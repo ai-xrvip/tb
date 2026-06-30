@@ -98,7 +98,6 @@ class Config:
     WEBHOOK_URL: str | None = os.getenv("WEBHOOK_URL") or None
 
     # ── Payment (EPay) ──
-    DONATION_API_TOKEN: str = os.getenv("DONATION_API_TOKEN", "")
     PAYMENT_MODE: str = os.getenv("PAYMENT_MODE", "test")  # test / production
     EPAY_PID: str = os.getenv("EPAY_PID", "")
     EPAY_KEY: str = os.getenv("EPAY_KEY", "")

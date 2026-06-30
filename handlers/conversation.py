@@ -99,5 +99,5 @@ async def cmd_retry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Prompt user to resend (avoids rate-limit bypass)
     prompt = last_user_msg[:200]
     await update.message.reply_text(
-        "Message undone! Send it again:\n\n" + prompt
+        "已撤销上一条回复，请重新发送：\n\n" + prompt
     )

@@ -4,10 +4,9 @@ import asyncio, base64, json, os, random, re, time, urllib.parse
 import httpx
 from config import config
 from utils.logger import logger
+from utils.web_scrape import pick_random_ref
 
 VIDEO_GEN_TIMEOUT = 120
-_REF_CACHE = {}
-_CACHE_TTL = 600
 _VIDEO_COMPOSITIONS = [
     "gentle smile and wave, soft breeze blowing hair, natural light, cinematic slow motion",
     "walking towards camera, confident stride, city background, golden hour lighting, smooth camera",
@@ -34,87 +33,19 @@ VIDEO_NEGATIVE_PROMPT = (
     "poorly drawn feet, bad feet, extra toes, missing toes"
 )
 
-IMG_TAG_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.IGNORECASE)
-MD_IMG_RE = re.compile(r'!\[.*?\]\(([^)]+)\)')
-
-
-async def _scrape_page(page_url: str) -> list:
-    """Scrape image URLs from a page (telegra.ph etc). Results cached for 10 min."""
-    now = time.time()
-    if page_url in _REF_CACHE:
-        ts, urls = _REF_CACHE[page_url]
-        if now - ts < _CACHE_TTL and urls:
-            return urls
-    try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.get(page_url, headers={"User-Agent": "Bot/1.0"})
-            if resp.status_code != 200:
-                return []
-            html = resp.text
-    except Exception:
-        return []
-
-    img_urls = IMG_TAG_RE.findall(html)
-    img_urls += MD_IMG_RE.findall(html)
-
-    parsed = urllib.parse.urlparse(page_url)
-    base = f"{parsed.scheme}://{parsed.hostname}"
-    resolved = []
-    for u in img_urls:
-        if u.startswith("/"): u = base + u
-        elif u.startswith("//"): u = "https:" + u
-        elif u.startswith("data:"): continue
-        elif not u.startswith("http"): u = urllib.parse.urljoin(page_url, u)
-        resolved.append(u)
-        if len(resolved) >= 30:
-            break
-
-    _REF_CACHE[page_url] = (now, resolved)
-    logger.info(f"Scraped {len(resolved)} images from {page_url[:60]}...")
-    return resolved
-
 
 async def _pick_ref(page_url: str) -> str | None:
-    """Scrape page and return a random image URL as reference."""
-    urls = await _scrape_page(page_url)
-    return random.choice(urls) if urls else None
+    """Scrape page and return a random image URL as reference (delegated to shared util)."""
+    return await pick_random_ref(page_url)
 
 
 def _get_character_desc(role_id: str) -> str:
-    """Get character description for video prompt."""
-    _ROLE_CHARACTER = {
-        "xiaolu": "cute young Asian woman, sweet smile, cosplayer, JK uniform, twin tails, soft makeup, fair skin, perfect hands, slender fingers",
-        "linxi": "beautiful Chinese woman, elegant professional, dark suit, high ponytail, sharp eyes, CEO aura, tall slender, fair skin, perfect hands",
-        "mia": "sporty Chinese-American woman, athletic build, ponytail, yoga wear, happy smile, muscular legs, abs, perfect hands",
-        "sunian": "graceful Chinese woman, gentle eyes, long wavy hair, linen dress, artistic temperament, slender figure, pale skin, perfect hands",
-        "yuki": "delicate Chinese girl, soft features, hanfu style, long straight black hair, porcelain skin, elegant posture, gentle smile, perfect hands",
-        "reina": "wealthy Japanese-Chinese young woman, designer clothes, luxury handbag, elegant jewelry, perfect makeup, tsundere look, perfect hands",
-        "chiyo": "gentle Chinese woman, apron over casual clothes, warm smile, slightly tired eyes, full figure, caring expression, perfect hands",
-        "nana": "fun Chinese girl, gaming headset, casual hoodie, short skirt, playful smile, colorful hair, energetic look, perfect hands",
-        "mizuki": "powerful Chinese CEO, sharp business suit, high heels, cold expression, elegant updo, intimidating aura, perfect hands",
-        "akari": "cute Chinese nurse, white uniform, gentle smile, natural makeup, round glasses, soft features, cute face, perfect hands",
-        "yuna": "tall Chinese fashion model, runway walk, designer clothes, perfect figure, long legs, elegant pose, high cheekbones, perfect hands",
-        "shiori": "introspective Chinese girl, glasses, book in hand, scholarly look, long braid, soft expression, vintage cardigan, perfect hands",
-        "sora": "elegant Chinese flight attendant, airline uniform, professional smile, perfect posture, gentle eyes, hair in bun, perfect hands",
-        "kaede": "strong Chinese policewoman, uniform, sharp eyes, athletic build, short hair, confident stance, perfect hands",
-        "ruri": "sharp Chinese lawyer, business suit, tote bag, confident expression, glasses, sleek bun, elegant heels, perfect hands",
-        "ren": "mysterious Chinese bartender, elegant black dress, cocktail shaker, smoky eyes, long hair, perfect hands",
-        "hana": "gentle Chinese florist, flower crown, linen apron, soft smile, tanned skin, natural look, perfect hands",
-        "mai": "elegant Chinese ballet dancer, leotard, tutu, pointe shoes, graceful posture, delicate features, perfect hands",
-        "momo": "sweet Taiwanese dessert chef, cute apron, flour on cheek, big eyes, short hair, happy expression, perfect hands",
-        "sakura": "gentle Chinese veterinarian, white coat, stethoscope, warm smile, soft eyes, caring hands, perfect hands",
-        "aya": "efficient Chinese secretary, office suit, glasses, smart bun, typing pose, professional smile, perfect hands",
-        "mei": "creative Chinese musician, guitar, bohemian dress, artistic look, messy bun, creative expression, perfect hands",
-        "koharu": "adventurous Chinese photographer, camera around neck, rugged boots, sun-kissed skin, free spirit, perfect hands",
-        "tsubaki": "determined Chinese journalist, trench coat, notepad, determined eyes, urban professional, perfect hands",
-        "rio": "cool Chinese female racer, racing suit, helmet under arm, lean athletic build, focused eyes, perfect hands",
-        "nozomi": "cute Chinese voice actress, microphone, headphones, cosplay accessories, expressive face, perfect hands",
-        "nami": "free-spirited Chinese surfer girl, wetsuit, surfboard, tan skin, wet hair, strong arms, perfect hands",
-        "fumi": "quiet Chinese librarian, vintage cardigan, glasses, serene expression, soft features, perfect hands",
-        "eri": "smart Chinese AI researcher, hoodie, glasses, messy ponytail, focused expression, perfect hands",
-        "yui": "cute Chinese maid cafe girl, maid uniform, cat ears, coffee tray, bright smile, perfect hands",
-    }
-    return _ROLE_CHARACTER.get(role_id, "beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup, perfect hands")
+    """Get character description for video prompt (imported from image_gen to avoid duplication)."""
+    try:
+        from image_gen import _ROLE_CHARACTER
+        return _ROLE_CHARACTER.get(role_id, "beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup, perfect hands")
+    except ImportError:
+        return "beautiful young Asian woman, cute face, charming smile, trendy fashion, natural makeup, perfect hands"
 
 
 def _build_video_prompt(text: str, role_id: str = "") -> str:

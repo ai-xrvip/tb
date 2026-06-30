@@ -181,14 +181,33 @@ class WebhookHandler(BaseHTTPRequestHandler):
         }).encode())
 
     def _handle_epay_callback(self):
-        """Receive EPay async payment notification"""
+        """Receive EPay async payment notification with signature verification."""
+        import hashlib
+        from urllib.parse import parse_qs
+
         try:
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length).decode("utf-8")
-            from urllib.parse import parse_qs
             params = parse_qs(body)
-            order_id = params.get("out_trade_no", [None])[0]
-            trade_status = params.get("trade_status", [None])[0]
+            # Extract flat params
+            flat_params = {k: (v[0] if isinstance(v, list) else v) for k, v in params.items()}
+
+            order_id = flat_params.get("out_trade_no", "")
+            trade_status = flat_params.get("trade_status", "")
+            sign_received = flat_params.pop("sign", "") or flat_params.pop("sign_type", "")
+            sign_type = flat_params.pop("sign_type", "MD5")
+
+            # Verify EPay signature
+            sign_str = "&".join(f"{k}={v}" for k, v in sorted(flat_params.items()) if k != "sign" and k != "sign_type") + "&key=" + config.EPAY_KEY
+            expected_sign = hashlib.md5(sign_str.encode()).hexdigest()
+
+            if sign_received and sign_received.lower() != expected_sign.lower():
+                logger.warning(f"EPay callback signature mismatch: order={order_id}")
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"signature error")
+                return
+
             if order_id and trade_status == "TRADE_SUCCESS":
                 import asyncio
                 from handlers.payment import handle_epay_callback
@@ -197,6 +216,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
                     asyncio.run_coroutine_threadsafe(
                         handle_epay_callback(order_id, trade_status), loop
                     )
+                else:
+                    logger.warning(f"EPay callback: no event loop for order={order_id}")
             else:
                 logger.warning(f"EPay callback: order={order_id} status={trade_status}")
             self.send_response(200)
@@ -391,9 +412,12 @@ async def cmd_announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Announcement helpers ──
 def _find_reference_photo(role_id: str) -> str | None:
+    # Validate role_id to prevent path traversal
+    if role_id not in ROLES:
+        return None
     ref_dir = Path(__file__).parent / "media" / role_id / "参考图"
     if ref_dir.is_dir():
-        photos = list(ref_dir.glob("*")) + list(ref_dir.glob("*.jpg")) + list(ref_dir.glob("*.png"))
+        photos = [f for f in ref_dir.iterdir() if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")]
         if photos:
             return str(random.choice(photos))
     return None

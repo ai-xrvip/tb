@@ -14,7 +14,7 @@ class DeepSeekProvider(BaseProvider):
     @property
     def client(self) -> AsyncOpenAI:
         if self._client is None:
-            self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url, timeout=30.0)
         return self._client
 
     async def chat(self, messages: list[dict], temperature: float = 0.7, max_tokens: int = 2048, **kwargs) -> str:

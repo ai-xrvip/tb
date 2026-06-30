@@ -14,7 +14,7 @@ class OpenAIProvider(BaseProvider):
     @property
     def client(self) -> AsyncOpenAI:
         if self._client is None:
-            kwargs = {"api_key": self.api_key}
+            kwargs = {"api_key": self.api_key, "timeout": 30.0}
             if self.base_url:
                 kwargs["base_url"] = self.base_url
             self._client = AsyncOpenAI(**kwargs)

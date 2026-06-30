@@ -108,7 +108,7 @@ async def cmd_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     is_vip = db.is_vip(target_id)
-    vip_text = f"✅ VIP 到期: {u.get('vip_expire', 'N/A')}" if is_vip else "❌ 非VIP"
+    vip_text = f"✅ VIP" if is_vip else "❌ 非VIP"
 
     history = db.get_chat_history(target_id)
     history_count = len(history)

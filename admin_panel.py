@@ -168,13 +168,23 @@ with gr.Blocks(css=CSS, title="AI GF Bot Admin") as demo:
 
 
 def start_admin_panel(port: int = 7860):
-    """Start the admin panel"""
+    """Start the admin panel with password auth."""
+    # Use environment variable for admin password, default to a random token
+    admin_user = os.getenv("ADMIN_USER", "admin")
+    admin_pass = os.getenv("ADMIN_PASSWORD", "")
+    if not admin_pass:
+        import secrets
+        admin_pass = secrets.token_urlsafe(16)
+        logger.warning(f"ADMIN_PASSWORD not set, using random: {admin_pass}")
+        logger.warning("Set ADMIN_PASSWORD env var for a fixed password.")
+
     logger.info("Admin panel starting on http://0.0.0.0:" + str(port))
     demo.queue(default_concurrency_limit=5).launch(
         server_name="0.0.0.0",
         server_port=port,
         share=False,
         show_error=True,
+        auth=(admin_user, admin_pass),
     )
 
 
