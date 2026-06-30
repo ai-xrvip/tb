@@ -190,8 +190,8 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     """构建发送给 LLM 的消息列表（含世界书/记忆）"""
     role = get_role(role_id)
     # OpenRouter magnum-v4 ???? HTML??????
-    system_prompt = "[SYSTEM] Always reply in plain text. Never use HTML tags, CSS styles, JavaScript or any markup. Output raw Chinese text only." + "\n" + system_prompt
     system_prompt = resolve_system_prompt(role, user_name="用户") if role else ""
+    system_prompt = "[SYSTEM] Always reply in plain text. Never use HTML tags, CSS styles, JavaScript or any markup. Output raw Chinese text only." + "\n" + system_prompt
 
 
     # 合并多个 system prompt 以减少上下文占用
