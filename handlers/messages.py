@@ -536,6 +536,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sent_msg = await update.message.reply_text(clean_reply)
 
     # ?? ???? TTS ?? + ??/???? ??
+    voice_sent = False
     voice_task = None
     image_task = None
     video_task = None
