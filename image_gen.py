@@ -1,4 +1,4 @@
-# Image generation - Agnes AI img2img
+﻿# Image generation - Agnes AI img2img
 # IMAGE_REF_{ROLE} = a page URL containing images, randomly picks one as reference.
 import base64, json, os, random, re, time, urllib.parse
 import httpx
@@ -77,7 +77,7 @@ def _build_visual_prompt(text: str, role_id: str = "") -> str:
     text = text.strip()[:400]
     # ??? [IMG] ??
     text = text.replace("[IMG]", "").strip()
-    identity = "faithful reproduction of reference image, same face, same person, identical identity, same facial features"
+    identity = "same person as reference photo, natural portrait, clear facial features"
     quality = "photorealistic, soft natural lighting, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece"
     return identity + ", " + quality + " -- scene: " + text
 
