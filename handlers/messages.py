@@ -516,9 +516,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 如果满足条件，尝试生成视频/图片
     if want_media and want_video and config.VIDEO_GEN_ENABLED and generate_video:
         try:
-            status_msg = await update.message.reply_text("??????????5??...")
             video_data = await generate_video(clean_reply, role_id)
-            await status_msg.delete()
             if video_data and len(video_data) > 1000:
                 sent_msg = await update.message.reply_video(video_data)
         except Exception as e:
