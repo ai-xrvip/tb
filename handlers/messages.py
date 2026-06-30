@@ -1,4 +1,4 @@
-﻿"""
+"""
 消息处理器 —— 文本对话(多LLM提供商 + 流式输出) + 媒体消息 + 管理员上传对话
 
 参考:
@@ -519,7 +519,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 先生图（快），再试视频
     if want_image and config.IMAGE_GEN_ENABLED and generate_image:
         try:
-            en_prompt = await translate_to_img_prompt(user_text, clean_reply)`n            image_data = await generate_image(en_prompt, role_id)
+            en_prompt = await translate_to_img_prompt(user_text, clean_reply)
+            image_data = await generate_image(en_prompt, role_id)
             if image_data and len(image_data) > 500:
                 sent_msg = await update.message.reply_photo(image_data)
         except Exception as e:

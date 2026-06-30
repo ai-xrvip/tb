@@ -74,17 +74,23 @@ _COMPOSITIONS = [
 
 
 def _build_visual_prompt(text: str, role_id: str = "") -> str:
-    """Build img2img prompt. Reference handles identity, AI text describes the scene."""
+    """Build img2img prompt. Reference image handles identity. Only add quality tags — NO character description."""
     text = text.strip()[:400]
-    quality = "same person as reference photo, photorealistic, 8k, masterpiece, soft lighting, perfect hands"
-    return quality + " -- scene: " + text
+    quality = "same person as reference photo, photorealistic, 8k, masterpiece, perfect hands, soft lighting"
+    return f"{quality} -- scene: {text}"
 
 
 
 async def translate_to_img_prompt(user_text: str, ai_reply: str) -> str:
-    """Take user request + AI reply, return English img2img prompt via DeepSeek."""
+    """Combine user request + AI reply into a short English img2img scene prompt.
+    Reference image handles the person's identity, so the prompt should ONLY describe:
+    clothing, pose, setting, lighting, camera angle. Do NOT describe face/identity."""
     import httpx
-    prompt_msg = f"""Convert this conversation into a short English image generation prompt (max 30 words). Describe ONLY the visual scene: what the person looks like, what they wear, their pose, setting, lighting. Do NOT include character names, dialogue, emotions, or refusals. Output ONLY the prompt text.
+    prompt_msg = f"""Translate this conversation into a short English img2img prompt (max 40 words).
+Describe ONLY: clothing/outfit (be specific!), pose, setting, lighting, camera distance (full-body/half-body/close-up).
+CRITICAL: Do NOT describe the person's face, race, hair, or identity — the reference photo handles that.
+If the user requests specific clothing (e.g. stockings, swimsuit, camisole), INCLUDE it in the prompt.
+Output ONLY the prompt text, no explanations.
 
 User said: {user_text}
 AI replied: {ai_reply}
@@ -100,7 +106,7 @@ English prompt:"""
                 json={
                     "model": "deepseek-chat",
                     "messages": [{"role": "user", "content": prompt_msg}],
-                    "max_tokens": 80,
+                    "max_tokens": 120,
                     "temperature": 0.3,
                 },
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
