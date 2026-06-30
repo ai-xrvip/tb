@@ -41,7 +41,7 @@ try:
 except Exception:
     generate_role_voice = None
 try:
-    from image_gen import generate_image
+    from image_gen import generate_image, translate_to_img_prompt
 except Exception:
     generate_image = None
 try:
@@ -519,7 +519,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 先生图（快），再试视频
     if want_image and config.IMAGE_GEN_ENABLED and generate_image:
         try:
-            image_data = await generate_image(clean_reply, role_id)
+            en_prompt = await translate_to_img_prompt(user_text, clean_reply)`n            image_data = await generate_image(en_prompt, role_id)
             if image_data and len(image_data) > 500:
                 sent_msg = await update.message.reply_photo(image_data)
         except Exception as e:

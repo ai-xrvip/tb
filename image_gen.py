@@ -79,6 +79,41 @@ def _build_visual_prompt(text: str, role_id: str = "") -> str:
     quality = "same person as reference photo, photorealistic, 8k, masterpiece, soft lighting, perfect hands"
     return quality + " -- scene: " + text
 
+
+
+async def translate_to_img_prompt(user_text: str, ai_reply: str) -> str:
+    """Take user request + AI reply, return English img2img prompt via DeepSeek."""
+    import httpx
+    prompt_msg = f"""Convert this conversation into a short English image generation prompt (max 30 words). Describe ONLY the visual scene: what the person looks like, what they wear, their pose, setting, lighting. Do NOT include character names, dialogue, emotions, or refusals. Output ONLY the prompt text.
+
+User said: {user_text}
+AI replied: {ai_reply}
+
+English prompt:"""
+    try:
+        api_key = config.DEEPSEEK_API_KEY
+        if not api_key:
+            return ai_reply[:400]
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://api.deepseek.com/v1/chat/completions",
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": prompt_msg}],
+                    "max_tokens": 80,
+                    "temperature": 0.3,
+                },
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            )
+            if resp.status_code == 200:
+                result = resp.json()["choices"][0]["message"]["content"].strip()
+                logger.info(f"Translated prompt: {result[:100]}")
+                return result
+    except Exception as e:
+        logger.error(f"Prompt translation failed: {e}")
+    return ai_reply[:400]
+
+
 async def generate_image(prompt: str, role_id: str = "", page_url: str = "") -> bytes | None:
     """Generate via Agnes img2img only. Requires reference image URL."""
     if not config.IMAGE_GEN_ENABLED:
