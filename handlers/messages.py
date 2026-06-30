@@ -191,7 +191,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     role = get_role(role_id)
     # OpenRouter magnum-v4 ???? HTML??????
     system_prompt = resolve_system_prompt(role, user_name="用户") if role else ""
-    system_prompt = "[SYSTEM] Always reply in plain text. Never use HTML tags, CSS styles, JavaScript or any markup. Output raw Chinese text only.\n\n[IMG RULE] When the user asks for photos, pictures, selfies, cosplay photos, or says they want to see you, add [IMG] at the end of your reply to trigger image generation. Only use [IMG] when the user explicitly asks for visual content." + "\n" + system_prompt
+    system_prompt = "[SYSTEM] Always reply in plain text. Never use HTML tags, CSS styles, JavaScript or any markup. Output raw Chinese text only." + "\n" + system_prompt
 
 
     # 合并多个 system prompt 以减少上下文占用
@@ -367,6 +367,19 @@ async def _get_provider_for_role(role_id: str, user_id: int = 0):
 
 
 
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理普通文本消息 —— 亲密度+时段感知延迟，角色化报错"""
+    user = update.effective_user
+    user_id = user.id
+    user_name = user.first_name or "用户"
+    # Check if voice transcribed text is available (from voice.py, safe injection-free approach)
+    voice_text = context.user_data.pop("pending_voice_text", None)
+    user_text = voice_text if voice_text else update.message.text.strip()
+
+    db.create_user(user_id)
+    user_data = db.get_user(user_id)
+    role_id = context.bot_data.get("role_id", "xiaolu")
     role = get_role(role_id)
     role_name = role.get("name", role_id) if role else role_id
 
@@ -460,12 +473,11 @@ async def _get_provider_for_role(role_id: str, user_id: int = 0):
     # ?? ???????? ??
     # ?? ???/??????? ??
     image_data = None
-    video_sent = False
     sent_msg = None
 
     # ????????
-    want_media = False
     want_video = False
+    want_media = False
     if clean_reply and len(clean_reply) > 5:
         required_tier = get_max_tier_for_text(role_id, clean_reply)
         if unlock_tier >= required_tier:
@@ -478,7 +490,7 @@ async def _get_provider_for_role(role_id: str, user_id: int = 0):
             want_video = any(kw in clean_reply for kw in motion_keywords)
             want_media = True
 
-    # ????????/????????????????
+    # ????????????
     if want_media and want_video and config.VIDEO_GEN_ENABLED and generate_video:
         try:
             status_msg = await update.message.reply_text("Generating video, 1-2 minutes...")
@@ -486,21 +498,18 @@ async def _get_provider_for_role(role_id: str, user_id: int = 0):
             await status_msg.delete()
             if video_data and len(video_data) > 1000:
                 sent_msg = await update.message.reply_video(video_data)
-                video_sent = True
         except Exception as e:
             logger.error(f"Video gen failed: {e}")
-    elif want_media and config.IMAGE_GEN_ENABLED and generate_image:
-        # ?? AI ????? [IMG] ?????
-        has_img_tag = "[IMG]" in clean_reply
-        if has_img_tag:
-            try:
-                image_data = await generate_image(clean_reply, role_id)
-                if image_data and len(image_data) > 500:
-                    sent_msg = await update.message.reply_photo(image_data)
-            except Exception as e:
-                logger.error(f"Image gen error: {e}")
+    # ?? [IMG] ?????
+    elif want_media and config.IMAGE_GEN_ENABLED and generate_image and "[IMG]" in clean_reply:
+        try:
+            image_data = await generate_image(clean_reply, role_id)
+            if image_data and len(image_data) > 500:
+                sent_msg = await update.message.reply_photo(image_data)
+        except Exception as e:
+            logger.error(f"Image gen error: {e}")
 
-    # ???????/?????????????????? [IMG] ??
+    # ???????/???????? [IMG] ??
     if clean_reply:
         display_text = clean_reply.replace("[IMG]", "").strip()
         if sent_msg:
