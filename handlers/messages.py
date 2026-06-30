@@ -1,4 +1,4 @@
-"""
+﻿"""
 消息处理器 —— 文本对话(多LLM提供商 + 流式输出) + 媒体消息 + 管理员上传对话
 
 参考:
@@ -521,8 +521,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sent_msg = await update.message.reply_video(video_data)
         except Exception as e:
             logger.error(f"Video gen failed: {e}")
-    # 尝试 [IMG] 标签触发图片生成
-    elif want_media and config.IMAGE_GEN_ENABLED and generate_image and "[IMG]" in clean_reply:
+    elif want_media and config.IMAGE_GEN_ENABLED and generate_image:
         try:
             image_data = await generate_image(clean_reply, role_id)
             if image_data and len(image_data) > 500:
@@ -530,7 +529,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Image gen error: {e}")
 
-    # 发送文字（清除[IMG]标签后）
+    # 发送文字
     if clean_reply:
         display_text = clean_reply.replace("[IMG]", "").strip()
         if sent_msg:
