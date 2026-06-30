@@ -126,22 +126,25 @@ def _build_video_prompt(text: str, role_id: str = "") -> str:
 
 
 async def generate_video(prompt: str, role_id: str = "", page_url: str = "") -> bytes | None:
-    """Generate video via Agnes. img2video when page_url set, text2video otherwise."""
+    """Generate video via Agnes img2video only. Requires reference image URL."""
     if not config.VIDEO_GEN_ENABLED:
         return None
     if not config.IMAGE_GEN_API_KEY:
         logger.warning("IMAGE_GEN_API_KEY not set (used for video gen too)")
         return None
-
-    ref_url = None
     if not page_url:
         page_url = config.get_image_ref(role_id)
-    if page_url:
-        ref_url = await _pick_ref(page_url)
+    if not page_url:
+        logger.warning(f"No video ref URL for role={role_id}")
+        return None
+
+    ref_url = await _pick_ref(page_url)
+    if not ref_url:
+        logger.warning(f"No images found on {page_url[:60]}")
+        return None
 
     video_prompt = _build_video_prompt(prompt, role_id)
-    mode = "img2video" if ref_url else "text2video"
-    logger.info(f"Video gen [{mode}]: role={role_id} prompt={prompt[:80]}...")
+    logger.info(f"Video gen [img2video]: role={role_id} prompt={prompt[:80]}...")
 
     task_id = await _submit_video_task(video_prompt, ref_url)
     if not task_id:
