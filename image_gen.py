@@ -112,9 +112,13 @@ async def _pick_ref(page_url: str) -> str | None:
 
 
 def _build_visual_prompt(text: str, role_id: str = "") -> str:
+    """Build img2img prompt focused on identity preservation."""
     text = text.strip()[:400]
-    quality = "high quality, photorealistic, soft natural lighting, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece"
-    return quality + ", " + random.choice(_COMPOSITIONS) + " -- scene: " + text
+    # ??? [IMG] ??
+    text = text.replace("[IMG]", "").strip()
+    identity = "faithful reproduction of reference image, same face, same person, identical identity, same facial features"
+    quality = "photorealistic, soft natural lighting, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece"
+    return identity + ", " + quality + " -- scene: " + text
 
 
 async def generate_image(prompt: str, role_id: str = "", page_url: str = "") -> bytes | None:
@@ -146,6 +150,7 @@ async def _call_agnes_api(prompt: str, ref_url: str) -> bytes | None:
         "prompt": prompt,
         "negative_prompt": NEGATIVE_PROMPT,
         "image": ref_url,
+        "guidance_scale": 18,
         "n": 1,
         "size": config.IMAGE_GEN_SIZE,
     }

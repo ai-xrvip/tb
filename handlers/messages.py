@@ -191,7 +191,7 @@ def _build_messages(user_id: int, role_id: str, user_text: str) -> list[dict]:
     role = get_role(role_id)
     # OpenRouter magnum-v4 ???? HTML??????
     system_prompt = resolve_system_prompt(role, user_name="用户") if role else ""
-    system_prompt = "[SYSTEM] Always reply in plain text. Never use HTML tags, CSS styles, JavaScript or any markup. Output raw Chinese text only." + "\n" + system_prompt
+    system_prompt = "[SYSTEM] Always reply in plain text. Never use HTML tags, CSS styles, JavaScript or any markup. Output raw Chinese text only.\n\n[IMG RULE] When the user asks for photos, pictures, selfies, cosplay photos, or says they want to see you, add [IMG] at the end of your reply to trigger image generation. Only use [IMG] when the user explicitly asks for visual content." + "\n" + system_prompt
 
 
     # 合并多个 system prompt 以减少上下文占用
@@ -490,19 +490,23 @@ async def _get_provider_for_role(role_id: str, user_id: int = 0):
         except Exception as e:
             logger.error(f"Video gen failed: {e}")
     elif want_media and config.IMAGE_GEN_ENABLED and generate_image:
-        try:
-            image_data = await generate_image(clean_reply, role_id)
-            if image_data and len(image_data) > 500:
-                sent_msg = await update.message.reply_photo(image_data)
-        except Exception as e:
-            logger.error(f"Image gen error: {e}")
+        # ?? AI ????? [IMG] ?????
+        has_img_tag = "[IMG]" in clean_reply
+        if has_img_tag:
+            try:
+                image_data = await generate_image(clean_reply, role_id)
+                if image_data and len(image_data) > 500:
+                    sent_msg = await update.message.reply_photo(image_data)
+            except Exception as e:
+                logger.error(f"Image gen error: {e}")
 
-    # ???????/???????????????
+    # ???????/?????????????????? [IMG] ??
     if clean_reply:
+        display_text = clean_reply.replace("[IMG]", "").strip()
         if sent_msg:
-            await sent_msg.reply_text(clean_reply)
+            await sent_msg.reply_text(display_text)
         else:
-            sent_msg = await update.message.reply_text(clean_reply)
+            sent_msg = await update.message.reply_text(display_text)
 
     # ???? TTS ??
     voice_task = None
