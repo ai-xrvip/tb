@@ -77,8 +77,8 @@ def _build_visual_prompt(text: str, role_id: str = "") -> str:
     text = text.strip()[:400]
     # ??? [IMG] ??
     text = text.replace("[IMG]", "").strip()
-    identity = "same person as reference photo, natural portrait, clear facial features"
-    quality = "photorealistic, soft natural lighting, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece"
+    identity = "same person as reference photo, wearing cosplay outfit, detailed costume, cosplay photography"
+    quality = "photorealistic, soft natural lighting, varied poses, mix of close-up and full-body shots, detailed skin texture, perfect hands, detailed fingers, cinematic composition, 8k, masterpiece"
     return identity + ", " + quality + " -- scene: " + text
 
 
