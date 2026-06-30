@@ -410,16 +410,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -- Erotic mode trigger / exit detection (admin only) --
     EROTIC_TRIGGER = "进入深夜模式"
     EROTIC_EXIT = "退出深夜模式"
-    if EROTIC_TRIGGER in user_text or EROTIC_EXIT in user_text:
-        if user_id not in config.ADMIN_IDS:
-            await update.message.reply_text("🚫 你没有权限使用这个功能哦～")
-            return
-        if EROTIC_TRIGGER in user_text:
+    # ?? ??????/?? ??
+    if "??????" in user_text or "??????" in user_text:
+        if "??????" in user_text:
             db.set_erotic_mode(user_id, True)
-            await update.message.reply_text("🔞 深夜模式已激活…今夜你是我的主人")
+            await update.message.reply_text("???????...????????")
         else:
             db.set_erotic_mode(user_id, False)
-            await update.message.reply_text("💤 已退出深夜模式，变回你的小可爱啦～")
+            await update.message.reply_text("????????????????~")
+        return
+
+    # ?? ?????OpenRouter ????? ??
+    if db.get_erotic_mode(user_id) and config.SUCCUBUS_API_KEY:
+        role = get_role(role_id)
+        system_prompt = resolve_system_prompt(role, user_name=user_name) if role else ""
+        msg_list = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text},
+        ]
+        from providers.factory import get_provider, ProviderType
+        provider = get_provider(
+            ProviderType.OPENAI,
+            api_key=config.SUCCUBUS_API_KEY,
+            base_url=config.SUCCUBUS_BASE_URL,
+            model=config.SUCCUBUS_MODEL,
+        )
+        try:
+            full_reply = await provider.chat(messages=msg_list, max_tokens=1024, temperature=0.9)
+        except Exception as e:
+            logger.error(f"Succubus LLM error: {e}")
+            await update.message.reply_text("??????????????~")
+            return
+        clean_reply = full_reply.strip()
+        await update.message.reply_text(clean_reply)
+        # ????????????????
         return
 
     messages = _build_messages(user_id, role_id, user_text)

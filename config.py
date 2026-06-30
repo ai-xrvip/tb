@@ -57,6 +57,11 @@ class Config:
     IMAGE_GEN_BASE_URL: str = os.getenv("IMAGE_GEN_BASE_URL", "https://apihub.agnes-ai.com/v1")
     IMAGE_GEN_MODEL: str = os.getenv("IMAGE_GEN_MODEL", "agnes-image-2.1-flash")
     IMAGE_GEN_SIZE: str = os.getenv("IMAGE_GEN_SIZE", "1024x1024")
+    # ?? ???? (OpenRouter uncensored, stateless) ??
+    SUCCUBUS_API_KEY: str = os.getenv("SUCCUBUS_API_KEY", "")
+    SUCCUBUS_BASE_URL: str = os.getenv("SUCCUBUS_BASE_URL", "https://openrouter.ai/api/v1")
+    SUCCUBUS_MODEL: str = os.getenv("SUCCUBUS_MODEL", "anthracite-org/magnum-v4-72b")
+
 
     # Video Generation (Agnes AI, image-to-video / text-to-video)
     VIDEO_GEN_ENABLED: bool = os.getenv("VIDEO_GEN_ENABLED", "true").lower() == "true"
