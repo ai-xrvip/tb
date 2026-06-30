@@ -502,42 +502,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 判断是否要生成图片/视频
     want_video = False
-    want_media = False
+    # 用户发言触发图片，AI回复触发视频
+    want_image = False
+    want_video = False
     if clean_reply and len(clean_reply) > 5:
         required_tier = get_max_tier_for_text(role_id, clean_reply)
         if unlock_tier >= required_tier:
-            motion_keywords = [
-                "跳舞", "转身", "走路", "跑步", "跳跃", "挥手", "打招呼",
-                "回头", "笑", "哭", "跑", "跳", "飞", "飘", "摇",
-                "走过来", "看过来", "转过头来", "起立", "坐",
-                "甩头", "撩发", "眨眼",
-            ]
+            photo_keywords = ["照片", "图片", "发图", "拍照", "相册", "自拍", "看看你",
+                            "发张", "来张", "cos", "cosplay", "Cosplay",
+                            "图", "照", "拍张", "发个", "给我看"]
+            want_image = any(kw in user_text for kw in photo_keywords)
+            motion_keywords = ["跳舞", "转身", "走路", "跑步", "跳跃", "挥手",
+                            "跑", "跳", "飞", "飘", "摇", "甩头", "撩发", "眨眼"]
             want_video = any(kw in clean_reply for kw in motion_keywords)
-            want_media = True
 
-    # 如果满足条件，尝试生成视频/图片
-    if want_media and want_video and config.VIDEO_GEN_ENABLED and generate_video:
-        try:
-            video_data = await generate_video(clean_reply, role_id)
-            if video_data and len(video_data) > 1000:
-                sent_msg = await update.message.reply_video(video_data)
-        except Exception as e:
-            logger.error(f"Video gen failed: {e}")
-    elif want_media and config.IMAGE_GEN_ENABLED and generate_image:
+    # 先生图（快），再试视频
+    if want_image and config.IMAGE_GEN_ENABLED and generate_image:
         try:
             image_data = await generate_image(clean_reply, role_id)
             if image_data and len(image_data) > 500:
                 sent_msg = await update.message.reply_photo(image_data)
         except Exception as e:
             logger.error(f"Image gen error: {e}")
+    elif want_video and config.VIDEO_GEN_ENABLED and generate_video:
+        try:
+            video_data = await generate_video(clean_reply, role_id)
+            if video_data and len(video_data) > 1000:
+                sent_msg = await update.message.reply_video(video_data)
+        except Exception as e:
+            logger.error(f"Video gen failed: {e}")
 
     # 发送文字
     if clean_reply:
-        display_text = clean_reply.replace("[IMG]", "").strip()
         if sent_msg:
-            await sent_msg.reply_text(display_text)
+            await sent_msg.reply_text(clean_reply)
         else:
-            sent_msg = await update.message.reply_text(display_text)
+            sent_msg = await update.message.reply_text(clean_reply)
+
 
     # 异步触发 TTS 配音
     voice_task = None
