@@ -274,6 +274,27 @@ async def cmd_setvip(update, context):
         await update.message.reply_text("用户ID必须是数字")
 
 
+async def cmd_stats(update, context):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    total_vip = len(VIP_USERS)
+    permanent = sum(1 for v in VIP_USERS.values() if v is None)
+    timed = total_vip - permanent
+    cards = _load_cards()
+    total_cards = len(cards)
+    used_cards = sum(1 for c in cards.values() if c.get("used"))
+    from scraper import gallery_clicks, keyword_popularity
+    stats = (
+        "📊 <b>统计数据</b>\n\n"
+        f"👑 VIP: {total_vip} ({permanent}永久 + {timed}限时)\n"
+        f"🔑 卡密: 已用{used_cards}/总计{total_cards}\n"
+        f"🔍 搜索热词: {len(keyword_popularity)}\n"
+        f"📂 点击记录: {len(gallery_clicks)}"
+    )
+    await update.message.reply_text(stats, parse_mode="HTML")
+
+
 async def cmd_my(update, context):
     user_id = update.effective_user.id
     if _is_vip(user_id):
