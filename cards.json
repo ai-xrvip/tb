@@ -1,0 +1,10 @@
+{
+  "TEST-VIP-001": {
+    "used": false,
+    "used_by": null
+  },
+  "VIP2024-FREE": {
+    "used": false,
+    "used_by": null
+  }
+}
