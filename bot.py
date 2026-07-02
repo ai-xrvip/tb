@@ -48,7 +48,7 @@ user_waiting_card = set()  # {user_id}
 ADMIN_IDS = {5405770555}
 
 MENU_KEYBOARD = ReplyKeyboardMarkup([
-    [KeyboardButton("🔍 搜索图集"), KeyboardButton("🎲 随机推荐"), KeyboardButton("👑 开通VIP"), KeyboardButton("❓ 帮助")],
+    [KeyboardButton("🔍 搜索图集"), KeyboardButton("🎲 随机推荐"), KeyboardButton("👑 开通VIP"), KeyboardButton("👑 我的")],
 ], resize_keyboard=True)
 
 
@@ -334,8 +334,8 @@ async def handle_text(update, context):
                     [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
                 ]))
         return
-    elif text == "❓ 帮助":
-        await cmd_help(update, context)
+    elif text == "👑 我的":
+        await cmd_my(update, context)
         return
 
     if user_id in user_waiting_card:
