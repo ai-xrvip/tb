@@ -471,8 +471,9 @@ async def handle_callback(update, context):
                 ]]))
         elif data == "vip_buy":
             await query.edit_message_text(
-                "💳 <b>购买卡密</b>\n\n请联系管理员购买卡密～",
+                "💳 <b>购买卡密</b>\n\n👉 点击下方链接联系客服购买：\nhttps://t.me/xiuren88bot?start=buy_524",
                 parse_mode="HTML",
+                disable_web_page_preview=True,
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
                 ]]))
