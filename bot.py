@@ -905,6 +905,7 @@ def main():
     app.add_handler(CommandHandler("random", cmd_random))
     app.add_handler(CommandHandler("my", cmd_my))
     app.add_handler(CommandHandler("setvip", cmd_setvip))
+    app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
