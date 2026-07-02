@@ -48,7 +48,7 @@ user_waiting_card = set()  # {user_id}
 ADMIN_IDS = {5405770555}
 
 MENU_KEYBOARD = ReplyKeyboardMarkup([
-    [KeyboardButton("🔍 搜索图集"), KeyboardButton("🎲 随机推荐"), KeyboardButton("👑 开通VIP"), KeyboardButton("👑 我的")],
+    [KeyboardButton("🔍 搜索"), KeyboardButton("🎲 推荐"), KeyboardButton("👑 VIP"), KeyboardButton("👤 我的")],
 ], resize_keyboard=True)
 
 
@@ -305,7 +305,7 @@ async def handle_text(update, context):
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    if text == "🔍 搜索图集":
+    if text == "🔍 搜索":
         user_waiting_search.add(user_id)
         await update.message.reply_text(
             "🔍 请直接输入搜索关键词～\n\n"
@@ -315,10 +315,10 @@ async def handle_text(update, context):
             ]])
         )
         return
-    elif text == "🎲 随机推荐":
+    elif text == "🎲 推荐":
         await cmd_random(update, context)
         return
-    elif text == "👑 开通VIP":
+    elif text == "👑 VIP":
         if _is_vip(user_id):
             await update.message.reply_text(
                 "<b>👑 你已是VIP会员</b>\n\n🎉 享受所有特权～",
@@ -334,7 +334,7 @@ async def handle_text(update, context):
                     [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
                 ]))
         return
-    elif text == "👑 我的":
+    elif text == "👤 我的":
         await cmd_my(update, context)
         return
 
