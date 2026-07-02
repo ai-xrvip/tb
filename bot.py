@@ -459,12 +459,17 @@ async def _show_results_page(msg_or_query, user_id):
     page = state["page"]
     keyword = state["keyword"]
     total = len(results)
-    total_pages = max(1, (total + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE)
+    full_pages = max(1, (total + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE)
+    is_vip = _is_vip(user_id)
+    total_pages = full_pages if is_vip else min(full_pages, 2)
     start = page * RESULTS_PER_PAGE
     end = min(start + RESULTS_PER_PAGE, total)
     page_results = results[start:end]
 
-    text = f"🔍 <b>{keyword}</b> 共 {total} 个结果（第{page+1}/{total_pages}页）\n\n"
+    text = f"🔍 <b>{keyword}</b> 共 {total} 个结果（第{page+1}/{total_pages}页）"
+    if not is_vip and full_pages > 2:
+        text += f"\n\n👑 开通VIP可查看全部{total}条结果"
+    text += "\n\n"
     buttons = []
     for i, r in enumerate(page_results):
         idx = start + i + 1
@@ -482,7 +487,8 @@ async def _show_results_page(msg_or_query, user_id):
         nav_buttons.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"p_{page+1}"))
     buttons.append(nav_buttons)
     buttons.append([
-        InlineKeyboardButton("👑 开通会员", callback_data="menu_vip"),
+        InlineKeyboardButton("👑 开通VIP", callback_data="menu_vip"),
+
         InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
     ])
     await _edit_message(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
