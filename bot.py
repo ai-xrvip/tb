@@ -486,9 +486,10 @@ async def _show_results_page(msg_or_query, user_id):
     if page < total_pages - 1:
         nav_buttons.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"p_{page+1}"))
     buttons.append(nav_buttons)
+    if not is_vip and full_pages > 2:
+        buttons.append([InlineKeyboardButton("👑 VIP查看全部搜索结果", callback_data="menu_vip")])
     buttons.append([
         InlineKeyboardButton("👑 开通VIP", callback_data="menu_vip"),
-
         InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
     ])
     await _edit_message(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
