@@ -39,7 +39,7 @@ url_store = {}               # {key: url}
 url_counter = 0
 url_last_cleanup = time.time()
 RESULTS_PER_PAGE = 5
-VIP_USERS = set()
+VIP_USERS = {}  # {user_id: expiry_timestamp or None for permanent}
 VIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vip_users.json")
 CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards.json")
 user_waiting_card = set()  # {user_id}
@@ -78,7 +78,7 @@ def _save_vip():
     """Save VIP user list to file."""
     try:
         with open(VIP_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(VIP_USERS), f)
+            json.dump(VIP_USERS, f)
     except Exception as e:
         logger.error(f"Failed to save VIP: {e}")
 
@@ -93,7 +93,7 @@ def _load_vip():
                 VIP_USERS = set(data)
     except Exception as e:
         logger.error(f"Failed to load VIP: {e}")
-        VIP_USERS = set()
+        VIP_USERS = {}  # {user_id: expiry_timestamp or None for permanent}
 
 
 
@@ -146,7 +146,16 @@ def _clean_title(title):
 
 
 def _is_vip(user_id):
-    return user_id in VIP_USERS
+    if user_id not in VIP_USERS:
+        return False
+    expiry = VIP_USERS[user_id]
+    if expiry is None:
+        return True  # permanent
+    if time.time() > expiry:
+        del VIP_USERS[user_id]
+        _save_vip()
+        return False
+    return True
 
 
 async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"):
@@ -209,7 +218,7 @@ async def cmd_setvip(update, context):
         return
     try:
         target = int(context.args[0])
-        VIP_USERS.add(target)
+        VIP_USERS[target] = None  # permanent
         _save_vip()
         await update.message.reply_text(f"✅ 已将用户 {target} 设为VIP")
         logger.info(f"VIP added: {target}")
@@ -308,13 +317,26 @@ async def handle_text(update, context):
             if cards[card_code].get("used"):
                 await update.message.reply_text("❌ 该卡密已被使用过。")
             else:
+                card_type = cards[card_code].get("type", "forever")
+                days = {"month": 30, "quarter": 90, "year": 360, "forever": None}
+                day_names = {"month": "月卡(30天)", "quarter": "季卡(90天)", "year": "年卡(360天)", "forever": "永久"}
+                d = days.get(card_type, None)
+                expiry = None if d is None else time.time() + d * 86400
                 cards[card_code]["used"] = True
                 cards[card_code]["used_by"] = user_id
+                cards[card_code]["activated_at"] = time.time()
                 _save_cards(cards)
-                VIP_USERS.add(user_id)
+                VIP_USERS[user_id] = expiry
                 _save_vip()
+                name = day_names.get(card_type, card_type)
+                if d:
+                    from datetime import datetime
+                    exp_str = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
+                    msg = f"✅ 卡密激活成功！\n\n类型：{name}\n到期：{exp_str}\n\n返回主菜单即可享受VIP特权！"
+                else:
+                    msg = f"✅ 卡密激活成功！\n\n类型：{name}\n\n返回主菜单即可享受VIP特权！"
                 await update.message.reply_text(
-                    "✅ 卡密激活成功！你现在是VIP会员啦～\n\n返回主菜单即可享受VIP特权！",
+                    msg,
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
                     ]]))
