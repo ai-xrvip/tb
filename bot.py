@@ -473,12 +473,12 @@ async def handle_callback(update, context):
                 ]]))
         elif data == "vip_buy":
             await query.edit_message_text(
-                "💳 <b>购买卡密</b>\n\n👉 点击下方链接联系客服购买：\nhttps://t.me/xiuren88bot?start=buy_524",
+                "💳 <b>购买卡密</b>\n\n👉 点击下方按钮直接联系客服：",
                 parse_mode="HTML",
-                disable_web_page_preview=True,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
-                ]]))
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💬 联系客服购买", url="https://t.me/xiuren88bot?start=buy_524")],
+                    [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
+                ]))
         elif data.startswith("p_"):
             page = int(data.split("_")[1])
             state = user_search_state.get(user_id)
@@ -792,6 +792,7 @@ def main():
 
     async def _clear_commands(app):
         await app.bot.delete_my_commands()
+        await app.bot.set_my_commands([])
         logger.info("Bot commands cleared")
 
 
