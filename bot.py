@@ -90,10 +90,13 @@ def _load_vip():
         if os.path.exists(VIP_FILE):
             with open(VIP_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                VIP_USERS = set(data)
+                if isinstance(data, list):
+                    VIP_USERS = {uid: None for uid in data}
+                else:
+                    VIP_USERS = {int(k): v for k, v in data.items()}
     except Exception as e:
         logger.error(f"Failed to load VIP: {e}")
-        VIP_USERS = {}  # {user_id: expiry_timestamp or None for permanent}
+        VIP_USERS = {}
 
 
 
