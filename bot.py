@@ -3,12 +3,16 @@ import asyncio
 import logging
 import sys
 import os
-import signal
 import traceback
 import json
 import re
 import time
 import gc
+import html
+from datetime import datetime
+from collections import defaultdict
+from logging.handlers import RotatingFileHandler
+from threading import Lock
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -24,27 +28,41 @@ from scraper import (
     download_image, track_click, extract_download_link,
 )
 
+# ---- Logging ----
+_log_handler = RotatingFileHandler(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.log"),
+    maxBytes=5 * 1024 * 1024,  # 5 MB
+    backupCount=2,
+    encoding="utf-8",
+)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[logging.StreamHandler(sys.stdout), _log_handler],
     force=True,
 )
 logger = logging.getLogger(__name__)
 
-# ---- State (with TTL cleanup) ----
-user_search_state = {}       # {user_id: {"page": int, "keyword": str, "results": list, "ts": float}}
-user_waiting_search = set()  # {user_id}
-url_store = {}               # {key: url}
-url_counter = 0
-url_last_cleanup = time.time()
+# ---- Constants ----
 RESULTS_PER_PAGE = 5
-VIP_USERS = {}  # {user_id: expiry_timestamp or None for permanent}
+URL_TTL = 3600  # URL store entries expire after 1 hour
+USER_STATE_TTL = 1800  # User search state expires after 30 min
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX = config.MAX_SEARCHES_PER_MINUTE
+
+# ---- State (with TTL cleanup) ----
+user_search_state: dict = {}       # {user_id: {"page": int, "keyword": str, "results": list, "ts": float}}
+user_waiting_search: set = set()   # {user_id}
+url_store: dict = {}               # {key: {"url": str, "ts": float}}
+url_counter: int = 0
+VIP_USERS: dict = {}               # {user_id: expiry_timestamp or None for permanent}
 VIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vip_users.json")
 CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards.json")
-user_waiting_card = set()  # {user_id}
-# Telegram callback data key length is limited to 64 bytes.
-# Use short keys instead of full URLs.
+user_waiting_card: set = set()     # {user_id}
+# Per-user rate limiting: {user_id: [timestamp, ...]}
+_user_search_times: dict = defaultdict(list)
+_user_search_lock = Lock()
+
 ADMIN_IDS = {5405770555}
 
 MENU_KEYBOARD = ReplyKeyboardMarkup([
@@ -52,26 +70,30 @@ MENU_KEYBOARD = ReplyKeyboardMarkup([
 ], resize_keyboard=True)
 
 
+# ========== State Helpers ==========
+
 def _cleanup_url_store():
-    """Remove old URL entries to prevent memory leaks."""
+    """Remove URL entries older than URL_TTL to prevent memory leaks."""
     global url_store
-    url_store = {k: v for k, v in url_store.items()}
+    now = time.time()
+    url_store = {k: v for k, v in url_store.items() if now - v.get("ts", 0) < URL_TTL}
 
 
 def _cleanup_user_state(user_id):
     """Remove expired user search state."""
     if user_id in user_search_state:
         ts = user_search_state[user_id].get("ts", 0)
-        if time.time() - ts > 1800:
+        if time.time() - ts > USER_STATE_TTL:
             del user_search_state[user_id]
 
 
 def _cleanup_all():
     """Periodic cleanup of all state stores."""
     now = time.time()
-    stale_users = [uid for uid, s in user_search_state.items() if now - s.get("ts", 0) > 1800]
+    stale_users = [uid for uid, s in user_search_state.items() if now - s.get("ts", 0) > USER_STATE_TTL]
     for uid in stale_users:
         del user_search_state[uid]
+    _cleanup_url_store()
 
 
 def _save_vip():
@@ -99,7 +121,6 @@ def _load_vip():
         VIP_USERS = {}
 
 
-
 def _load_cards() -> dict:
     try:
         if os.path.exists(CARD_FILE):
@@ -119,19 +140,40 @@ def _save_cards(cards: dict):
 
 
 def _store_url(url):
-    """Store URL and return a short key. Telegram callback data that exceeds Telegram 64-byte limit."""
-    global url_counter, url_last_cleanup
+    """Store URL with timestamp and return a short key."""
+    global url_counter
     url_counter += 1
     key = str(url_counter)
-    url_store[key] = url
-    # Cleanup old entries every 1000 stores
+    url_store[key] = {"url": url, "ts": time.time()}
     if url_counter % 1000 == 0:
         _cleanup_url_store()
     return key
 
 
 def _get_url(key):
-    return url_store.get(key, "")
+    entry = url_store.get(key)
+    if not entry:
+        return ""
+    # Check TTL
+    if time.time() - entry.get("ts", 0) > URL_TTL:
+        del url_store[key]
+        return ""
+    return entry["url"]
+
+
+def _check_rate_limit(user_id: int) -> bool:
+    """Check if user has exceeded the rate limit. Returns True if allowed."""
+    now = time.time()
+    cutoff = now - RATE_LIMIT_WINDOW
+    with _user_search_lock:
+        times = _user_search_times[user_id]
+        # Remove old entries
+        _user_search_times[user_id] = [t for t in times if t > cutoff]
+        current_count = len(_user_search_times[user_id])
+        if current_count >= RATE_LIMIT_MAX:
+            return False
+        _user_search_times[user_id].append(now)
+        return True
 
 
 def _parse_count_from_title(title):
@@ -167,8 +209,11 @@ async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"
             await msg_or_query.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
         else:
             await msg_or_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-    except Exception:
-        pass
+    except Exception as e:
+        # "Message is not modified" is common and harmless; log others
+        err_str = str(e)
+        if "not modified" not in err_str.lower():
+            logger.warning(f"_edit_message failed: {err_str}")
 
 
 # ========== Start Menu ==========
@@ -236,7 +281,6 @@ async def cmd_my(update, context):
         if expiry is None:
             info = "永久会员 ♮️"
         else:
-            from datetime import datetime
             exp_str = datetime.fromtimestamp(expiry).strftime("%Y年%m月%d日")
             remaining = max(0, int((expiry - time.time()) / 86400))
             info = f"到期：{exp_str}  (剩{remaining}天)"
@@ -354,17 +398,15 @@ async def handle_text(update, context):
                 day_names = {"month": "月卡(30天)", "quarter": "季卡(90天)", "year": "年卡(360天)", "forever": "永久", "trial": "体验卡(1天)"}
                 d = days.get(card_type, None)
                 expiry = None if d is None else time.time() + d * 86400
-                is_trial = (card_type == "trial")
-                if not is_trial:
-                    cards[card_code]["used"] = True
-                    cards[card_code]["used_by"] = user_id
+                # Mark card as used (including trial, to prevent reuse)
+                cards[card_code]["used"] = True
+                cards[card_code]["used_by"] = user_id
                 cards[card_code]["activated_at"] = time.time()
                 _save_cards(cards)
                 VIP_USERS[user_id] = expiry
                 _save_vip()
                 name = day_names.get(card_type, card_type)
                 if d:
-                    from datetime import datetime
                     exp_str = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
                     msg = f"✅ 卡密激活成功！\n\n类型：{name}\n到期：{exp_str}\n\n返回主菜单即可享受VIP特权！"
                 else:
@@ -396,8 +438,19 @@ async def handle_text(update, context):
 
 async def _do_search(update, keyword):
     user_id = update.effective_user.id
+
+    # Rate limiting
+    if not _is_vip(user_id) and not _check_rate_limit(user_id):
+        await update.message.reply_text(
+            "⏱️ 操作太快了，请稍后再试～",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+            ]])
+        )
+        return
+
     _cleanup_user_state(user_id)
-    msg = await update.message.reply_text(f"🔍 正在搜索: <b>{keyword}</b>...", parse_mode="HTML")
+    msg = await update.message.reply_text(f"🔍 正在搜索: <b>{html.escape(keyword)}</b>...", parse_mode="HTML")
     try:
         results = search_galleries(keyword)
     except Exception as e:
@@ -406,7 +459,7 @@ async def _do_search(update, keyword):
         return
     if not results:
         await _edit_message(msg,
-            f"😔 没有找到与 <b>{keyword}</b> 相关的图集。\n\n换个关键词试试？",
+            f"😔 没有找到与 <b>{html.escape(keyword)}</b> 相关的图集。\n\n换个关键词试试？",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔍 重新搜索", callback_data="menu_search"),
                 InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
@@ -614,7 +667,7 @@ async def _show_results_page(msg_or_query, user_id):
     end = min(start + RESULTS_PER_PAGE, total)
     page_results = results[start:end]
 
-    text = f"🔍 <b>{keyword}</b> 共 {total} 个结果（第{page+1}/{full_pages}页）"
+    text = f"🔍 <b>{html.escape(keyword)}</b> 共 {total} 个结果（第{page+1}/{full_pages}页）"
     if not is_vip and full_pages > 2:
         text += f"\n\n👑 开通VIP可查看全部{total}条结果"
     text += "\n\n"
@@ -622,7 +675,7 @@ async def _show_results_page(msg_or_query, user_id):
     for i, r in enumerate(page_results):
         idx = start + i + 1
         clean_title = _clean_title(r["title"])
-        text += f"{idx}. {clean_title}\n"
+        text += f"{idx}. {html.escape(clean_title)}\n"
         btn_label = clean_title[:24] + ".." if len(clean_title) > 26 else clean_title[:26]
         url_key = _store_url(r["url"])
         buttons.append([InlineKeyboardButton(f"📷 {idx}. {btn_label}", callback_data=f"d_{url_key}")])
@@ -666,7 +719,7 @@ async def _send_gallery_detail(update, url, gallery_data=None):
     display_count = original_count if original_count > 0 else len(all_images)
     clean_title = _clean_title(title)
 
-    text = f"🎀 {clean_title}\n📸 {display_count}张"
+    text = f"🎀 {html.escape(clean_title)}\n📸 {display_count}张"
     if publish_date:
         text += f"\n🕐 {publish_date}"
 
@@ -804,6 +857,20 @@ async def error_handler(update, context):
 
 # ========== Main ==========
 
+async def shutdown(app, signal_str=None):
+    """Graceful shutdown handler."""
+    if signal_str:
+        logger.info(f"Received signal {signal_str}, shutting down...")
+    else:
+        logger.info("Shutting down...")
+    try:
+        await app.stop()
+        await app.shutdown()
+    except Exception as e:
+        logger.error(f"Shutdown error: {e}")
+    logger.info("Bot stopped.")
+
+
 def main():
     errors = config.validate()
     if errors:
@@ -823,7 +890,6 @@ def main():
             BotCommand("my", "👑 我的VIP"),
         ])
         logger.info("Bot commands set")
-
 
     app = Application.builder().token(config.BOT_TOKEN).post_init(_setup_commands).build()
     app.add_handler(CommandHandler("start", cmd_start))
@@ -851,7 +917,6 @@ def main():
                 three_days = 3 * 86400
                 for uid, expiry in list(VIP_USERS.items()):
                     if expiry is not None and 0 < expiry - now <= three_days:
-                        from datetime import datetime
                         exp_str = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
                         try:
                             await application.bot.send_message(
@@ -867,26 +932,48 @@ def main():
 
     if config.WEBHOOK_URL:
         logger.info(f"Starting in webhook mode: {config.WEBHOOK_URL}")
+
         async def _start_webhook():
             await app.initialize()
             await app.start()
             asyncio.create_task(_periodic_cleanup(app))
             await app.bot.set_webhook(url=f"{config.WEBHOOK_URL}/webhook")
             logger.info("Webhook set. Waiting...")
-            await asyncio.Event().wait()
-        asyncio.run(_start_webhook())
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await shutdown(app)
+
+        try:
+            asyncio.run(_start_webhook())
+        except KeyboardInterrupt:
+            asyncio.run(shutdown(app, "SIGINT"))
     else:
         logger.info("Starting in polling mode")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        # Register signal handlers
-        for sig in (signal.SIGINT, signal.SIGTERM):
+
+        async def _run_polling():
+            cleanup_task = asyncio.create_task(_periodic_cleanup(app))
             try:
-                loop.add_signal_handler(sig, lambda: None)
-            except NotImplementedError:
+                await app.run_polling(
+                    allowed_updates=["message", "callback_query"],
+                    close_loop=False,
+                    stop_signals=[],
+                )
+            except asyncio.CancelledError:
                 pass
-        asyncio.ensure_future(_periodic_cleanup(app), loop=loop)
-        app.run_polling(allowed_updates=["message", "callback_query"], close_loop=False)
+            finally:
+                cleanup_task.cancel()
+                try:
+                    await cleanup_task
+                except asyncio.CancelledError:
+                    pass
+                await shutdown(app)
+
+        try:
+            asyncio.run(_run_polling())
+        except KeyboardInterrupt:
+            logger.info("Received KeyboardInterrupt")
+            # The asyncio.run() already handles cancellation
 
 
 if __name__ == "__main__":

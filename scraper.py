@@ -19,17 +19,44 @@ HEADERS = {"User-Agent": config.USER_AGENT}
 
 _cache: dict[str, tuple[float, Any]] = {}
 
-# Popularity tracking
+# Popularity tracking (with TTL)
 keyword_popularity: dict[str, int] = defaultdict(int)
 gallery_clicks: dict[str, int] = defaultdict(int)
 gallery_titles: dict[str, str] = {}
+_click_last_cleanup = 0.0
+_CLICK_TTL = 86400 * 7  # keep click data for 7 days
+
+
+def _cleanup_click_tracking():
+    """Periodically trim click tracking to prevent unbounded growth."""
+    global _click_last_cleanup
+    now = time.time()
+    if now - _click_last_cleanup < 3600:  # once per hour max
+        return
+    _click_last_cleanup = now
+    # Just cap the size - if we have too many entries, trim the least popular
+    max_entries = 5000
+    if len(gallery_clicks) > max_entries:
+        sorted_items = sorted(gallery_clicks.items(), key=lambda x: x[1], reverse=True)
+        gallery_clicks.clear()
+        gallery_clicks.update(sorted_items[:max_entries])
+        # Also clean gallery_titles
+        for url in list(gallery_titles.keys()):
+            if url not in gallery_clicks:
+                del gallery_titles[url]
+    if len(keyword_popularity) > 500:
+        sorted_kw = sorted(keyword_popularity.items(), key=lambda x: x[1], reverse=True)
+        keyword_popularity.clear()
+        keyword_popularity.update(sorted_kw[:500])
 
 
 def track_search(keyword: str):
+    _cleanup_click_tracking()
     keyword_popularity[keyword.lower()] += 1
 
 
 def track_click(url: str, title: str = ""):
+    _cleanup_click_tracking()
     gallery_clicks[url] += 1
     if title:
         gallery_titles[url] = title
@@ -59,7 +86,7 @@ def _fix_image_url(src: str) -> Optional[str]:
 def _fetch(url: str, retries: int = 2) -> Optional[requests.Response]:
     for attempt in range(retries):
         try:
-            r = requests.get(url, headers=HEADERS, timeout=config.REQUEST_TIMEOUT)
+            r = requests.get(url, headers=HEADERS, timeout=config.REQUEST_TIMEOUT, verify=config.SSL_VERIFY)
             if r.status_code == 200:
                 return r
             if r.status_code == 429:
@@ -79,7 +106,7 @@ def download_image(url: str, referer: str = config.BASE_URL) -> Optional[tuple[B
     img_headers = {**HEADERS, "Referer": referer}
     for attempt in range(2):
         try:
-            r = requests.get(url, headers=img_headers, timeout=15, verify=False)
+            r = requests.get(url, headers=img_headers, timeout=15, verify=config.SSL_VERIFY)
             r.raise_for_status()
             ct = r.headers.get("Content-Type", "image/jpeg")
             if not ct.startswith("image/"):
@@ -131,7 +158,8 @@ def _extract_date(soup: BeautifulSoup) -> str:
     return ""
 
 
-def search_galleries(keyword: str, max_results: int = None, max_pages: int = 30) -> list[dict]:
+def search_galleries(keyword: str, max_results: int = None, max_pages: int = 3) -> list[dict]:
+    """Search galleries by keyword. Defaults to 3 search pages to limit requests."""
     if max_results is None:
         max_results = config.MAX_SEARCH_RESULTS
 
@@ -153,7 +181,7 @@ def search_galleries(keyword: str, max_results: int = None, max_pages: int = 30)
 
     soup = BeautifulSoup(r.text, "html.parser")
 
-    # Collect all search result page URLs
+    # Collect pagination links from the first page
     search_pages = [search_url]
     for a in soup.select(".page-links a.page-numbers, .pagination a.page-numbers"):
         href = a.get("href")
@@ -161,11 +189,9 @@ def search_galleries(keyword: str, max_results: int = None, max_pages: int = 30)
             full = href if href.startswith("http") else config.BASE_URL.rstrip("/") + href
             if full not in search_pages:
                 search_pages.append(full)
-    base = f"{config.BASE_URL}/search/{urllib.parse.quote(keyword)}"
-    for p in range(2, max_pages + 1):
-        page_url = f"{base}/page/{p}/"
-        if page_url not in search_pages:
-            search_pages.append(page_url)
+
+    # Only paginate if first page had enough results to warrant it
+    # and respect max_pages parameter (reduced to 3 default from 30)
     search_pages = search_pages[:max_pages]
     logger.info(f"Will scrape {len(search_pages)} search pages")
 
@@ -333,7 +359,7 @@ def extract_download_link(post_url: str) -> str:
     short_code = m.group(1)
     short_url = f"https://m.4khd.com/{short_code}"
     logger.info(f"Found short link: {short_url}")
-    r2 = requests.get(short_url, headers=HEADERS, allow_redirects=True, timeout=15)
+    r2 = requests.get(short_url, headers=HEADERS, allow_redirects=True, timeout=15, verify=config.SSL_VERIFY)
     if r2.status_code != 200:
         return ""
     m2 = re.search(r"https?://www\.terabox\.com/[^\s\"'<>]+", r2.text)

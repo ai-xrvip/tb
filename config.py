@@ -11,29 +11,35 @@ else:
 
 class Config:
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
-    
+
     # Search settings
     MAX_SEARCH_RESULTS: int = int(os.getenv("MAX_SEARCH_RESULTS", "999"))
     MAX_PAGES_PER_POST: int = int(os.getenv("MAX_PAGES_PER_POST", "5"))
     MAX_IMAGES_PER_POST: int = int(os.getenv("MAX_IMAGES_PER_POST", "30"))
-    
+
     # Site settings
     BASE_URL: str = "https://www.4khd.com"
     SEARCH_URL: str = "https://www.4khd.com/?s={keyword}"
-    
+
     # HTTP
     REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "15"))
-    
+
     # Webhook (leave empty for polling mode)
     WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")
-    
+
     USER_AGENT: str = os.getenv(
         "USER_AGENT",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Safari/537.36"
     )
-    
+
     # Cache
     CACHE_TTL: int = int(os.getenv("CACHE_TTL", "300"))
+
+    # SSL verification (disable for sites with problematic certs)
+    SSL_VERIFY: bool = os.getenv("SSL_VERIFY", "true").lower() in ("true", "1", "yes")
+
+    # Rate limiting
+    MAX_SEARCHES_PER_MINUTE: int = int(os.getenv("MAX_SEARCHES_PER_MINUTE", "10"))
 
     @classmethod
     def validate(cls) -> list[str]:
