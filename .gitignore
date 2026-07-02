@@ -1,45 +1,7 @@
-# ── Environment ──
 .env
 .env.*
 !.env.example
-!.env.template
-
-# ── Python ──
 __pycache__/
 *.py[cod]
-*.pyo
-*.egg-info/
-dist/
-build/
-
-# ── Database ──
-*.db
-*.db-*
-backups/
-
-# ── Logs ──
-logs/
 *.log
-
-# ── OS ──
-.DS_Store
-Thumbs.db
-
-# ── IDE ──
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# ── Temporary ──
-tmp/
-outputs/
-_chars_data.json
-_ctx.txt
-
-# ── Railway ──
 railway.env
-
-# Reference photos (kept in refs/ for CDN, ignore local media copies)
-media/*/参考图/
-*.bak_manual

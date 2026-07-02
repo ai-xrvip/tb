@@ -1,641 +1,706 @@
-""" bot.py — Multi-Bot launcher with Polling & Webhook support """
-import os
-import sys
+"""Gallery Search Bot - Telegram Bot"""
 import asyncio
-import random
-import threading
-import time
+import logging
+import sys
+import os
+import signal
+import traceback
 import json
-from pathlib import Path
-import urllib.request
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import re
+import time
+import gc
+
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    Message, InputMediaPhoto, ReplyKeyboardMarkup, KeyboardButton,
+)
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, filters, ContextTypes,
 )
 from config import config
-from deep_dream import summarize_user_conversation
-from roles import ROLES, get_role
-from database import db
-from utils.logger import logger
-try:
-    from db_sync import download_db, upload_db, sync_loop
-    _db_sync_ok = True
-except Exception:
-    logger.warning("db_sync not available, DB persistence disabled")
-    _db_sync_ok = False
-    download_db = lambda x: False
-    upload_db = lambda x: False
-    sync_loop = lambda x, y: None
-from utils.rate_limit import check_rate_limit
-from handlers.commands import cmd_start, cmd_checkin, cmd_redeem, cmd_gencode
-from handlers.pay import cmd_gift_status, gift_callback
-from handlers.messages import (
-    handle_message, handle_media_message,
-    error_handler, get_upload_conversation_handler,
+from scraper import (
+    search_galleries, get_gallery_images, get_random_gallery,
+    download_image, track_click, extract_download_link,
 )
-from handlers.group import handle_group_message
-from handlers.voice import handle_voice_message
-from handlers.admin import cmd_broadcast, cmd_stats, cmd_user_info, cmd_set_vip, cmd_yuanwei_orders
-from handlers.admin_panel import admin_main, admin_callback
-from handlers.payment import handle_paywall_callback
-from handlers.conversation import cmd_clear, cmd_export, cmd_reset, cmd_retry
-from handlers.yuanwei import get_yuanwei_conversation_handler, handle_yuanwei_callback
-from handlers.keepsake import get_keepsake_conversation_handler, handle_keepsake_callback
-from handlers.testimonial import cmd_screenshot, cmd_post_testimonial
 
-# ── Shared shutdown flag ──
-_shutdown_flag = threading.Event()
-shutdown_event = asyncio.Event()
-_global_jobs_registered = False
-_start_time = time.time()
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,
+)
+logger = logging.getLogger(__name__)
+
+# ---- State (with TTL cleanup) ----
+user_search_state = {}       # {user_id: {"page": int, "keyword": str, "results": list, "ts": float}}
+user_waiting_search = set()  # {user_id}
+url_store = {}               # {key: url}
+url_counter = 0
+url_last_cleanup = time.time()
+RESULTS_PER_PAGE = 5
+VIP_USERS = set()
+VIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vip_users.json")
+# Telegram callback data key length is limited to 64 bytes.
+# Use short keys instead of full URLs.
+ADMIN_IDS = {5405770555}
+
+MENU_KEYBOARD = ReplyKeyboardMarkup([
+    [KeyboardButton("🔍 ????"), KeyboardButton("🎲 ????")],
+    [KeyboardButton("👑 ??VIP"), KeyboardButton("❓ ??")],
+], resize_keyboard=True)
 
 
-def _get_memory_usage() -> dict:
-    """Read memory usage from /proc/self/status (Linux only)."""
+def _cleanup_url_store():
+    """Remove old URL entries to prevent memory leaks."""
+    global url_store
+    url_store = {k: v for k, v in url_store.items()}
+
+
+def _cleanup_user_state(user_id):
+    """Remove expired user search state."""
+    if user_id in user_search_state:
+        ts = user_search_state[user_id].get("ts", 0)
+        if time.time() - ts > 1800:
+            del user_search_state[user_id]
+
+
+def _cleanup_all():
+    """Periodic cleanup of all state stores."""
+    now = time.time()
+    stale_users = [uid for uid, s in user_search_state.items() if now - s.get("ts", 0) > 1800]
+    for uid in stale_users:
+        del user_search_state[uid]
+
+
+def _save_vip():
+    """Save VIP user list to file."""
     try:
-        with open("/proc/self/status") as f:
-            raw = f.read()
-        vm_size = vm_rss = 0
-        for line in raw.splitlines():
-            if line.startswith("VmSize:"):
-                vm_size = int(line.split()[1])
-            elif line.startswith("VmRSS:"):
-                vm_rss = int(line.split()[1])
-        return {"vm_size_kb": vm_size, "vm_rss_kb": vm_rss}
-    except Exception:
-        return {"vm_size_kb": 0, "vm_rss_kb": 0}
-
-
-def validate_config() -> list[str]:
-    """Return list of config errors; does NOT exit."""
-    errors = config.validate()
-    if errors:
-        for err in errors:
-            logger.error(f"Config error: {err}")
-    else:
-        logger.info("Config validation passed")
-    return errors
-
-
-async def _rate_limit_check(update: Update, user_id: int, is_admin: bool) -> bool:
-    if not config.RATE_LIMIT_ENABLED:
-        return True
-    allowed = await check_rate_limit(user_id, is_admin)
-    if not allowed:
-        msg = update.effective_message
-        if msg is not None:
-            await msg.reply_text("🚀 消息太频繁啦，稍等一下再聊～")
-    return allowed
-
-
-def _wrap_handler(handler):
-    """Wrap CommandHandler, MessageHandler, or CallbackQueryHandler with rate limiting."""
-    async def wrapped(update: Update, context):
-        user = update.effective_user
-        if user is None:
-            return await handler(update, context)
-        user_id = user.id
-        is_admin = user_id in config.ADMIN_IDS
-        if not await _rate_limit_check(update, user_id, is_admin):
-            return
-        return await handler(update, context)
-    return wrapped
-
-
-# ── Threading HTTP server for healthcheck + webhook ──
-class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
-    """Multi-threaded HTTP server"""
-    daemon_threads = True
-
-
-class WebhookHandler(BaseHTTPRequestHandler):
-    apps: dict = {}
-    loop: asyncio.AbstractEventLoop = None
-
-    def do_GET(self):
-        if self.path in ("/", "/health"):
-            self._send_health()
-        elif self.path == "/health/json":
-            self._send_health_json()
-        elif self.path.startswith("/payment/callback"):
-            self._handle_epay_callback()
-        else:
-            self.send_error(404)
-
-    def do_POST(self):
-        if self.path.startswith("/webhook/"):
-            role_id = self.path.split("/")[-1]
-            app = self.apps.get(role_id)
-            if not app:
-                self.send_error(404, f"Unknown role: {role_id}")
-                return
-            try:
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length)
-                update_data = json.loads(body)
-                asyncio.run_coroutine_threadsafe(
-                    app.process_update(Update.de_json(update_data, app.bot)),
-                    self.loop
-                )
-                self.send_response(200)
-                self.end_headers()
-            except Exception as e:
-                logger.error(f"webhook processing failed role={role_id}: {e}")
-                self.send_error(500)
-        elif self.path.startswith("/payment/callback"):
-            self._handle_epay_callback()
-        else:
-            self.send_error(404)
-
-    def _send_health(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps({
-            "status": "ok",
-            "active_bots": len(self.apps),
-            "provider": config.LLM_PROVIDER,
-        }).encode())
-
-    def _send_health_json(self):
-        try:
-            from database import db as _db
-            user_count = _db.get_total_user_count() if hasattr(_db, "get_total_user_count") else 0
-        except Exception:
-            user_count = 0
-        memory = _get_memory_usage()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps({
-            "status": "ok",
-            "active_bots": len(self.apps),
-            "users": user_count,
-            "provider": config.LLM_PROVIDER,
-            "memory": memory,
-            "global_jobs_registered": _global_jobs_registered,
-            "uptime_seconds": int(time.time() - _start_time),
-        }).encode())
-
-    def _handle_epay_callback(self):
-        """Receive EPay async payment notification with signature verification."""
-        import hashlib
-        from urllib.parse import parse_qs
-
-        try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length).decode("utf-8")
-            params = parse_qs(body)
-            # Extract flat params
-            flat_params = {k: (v[0] if isinstance(v, list) else v) for k, v in params.items()}
-
-            order_id = flat_params.get("out_trade_no", "")
-            trade_status = flat_params.get("trade_status", "")
-            sign_received = flat_params.pop("sign", "") or flat_params.pop("sign_type", "")
-            sign_type = flat_params.pop("sign_type", "MD5")
-
-            # Verify EPay signature
-            sign_str = "&".join(f"{k}={v}" for k, v in sorted(flat_params.items()) if k != "sign" and k != "sign_type") + "&key=" + config.EPAY_KEY
-            expected_sign = hashlib.md5(sign_str.encode()).hexdigest()
-
-            if sign_received and sign_received.lower() != expected_sign.lower():
-                logger.warning(f"EPay callback signature mismatch: order={order_id}")
-                self.send_response(403)
-                self.end_headers()
-                self.wfile.write(b"signature error")
-                return
-
-            if order_id and trade_status == "TRADE_SUCCESS":
-                import asyncio
-                from handlers.payment import handle_epay_callback
-                loop = self.loop if hasattr(self, 'loop') and self.loop else None
-                if loop:
-                    asyncio.run_coroutine_threadsafe(
-                        handle_epay_callback(order_id, trade_status), loop
-                    )
-                else:
-                    logger.warning(f"EPay callback: no event loop for order={order_id}")
-            else:
-                logger.warning(f"EPay callback: order={order_id} status={trade_status}")
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"success")
-        except Exception as e:
-            logger.error(f"EPay callback error: {e}")
-            self.send_error(500)
-
-    def log_message(self, format, *args):
-        pass  # Suppress default HTTP logs
-
-
-def run_healthcheck():
-    port = int(os.environ.get("PORT", "8080"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), WebhookHandler)
-    logger.info(f"Healthcheck server listening on port {port}")
-    server.serve_forever()
-
-
-async def _load_plugins():
-    try:
-        from plugins import plugin_manager
-        await plugin_manager.load_all()
+        with open(VIP_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(VIP_USERS), f)
     except Exception as e:
-        logger.warning(f"Plugin loading skipped: {e}")
+        logger.error(f"Failed to save VIP: {e}")
 
 
-def start_admin_thread(port: int = 7860):
-    import threading as _th
-    def _run():
-        try:
-            from admin_panel import start_admin_panel
-            start_admin_panel(port)
-        except Exception as e:
-            logger.warning(f"Admin panel unavailable (gradio not installed?): {e}")
-    t = _th.Thread(target=_run, daemon=True, name="admin-panel")
-    t.start()
-    logger.info(f"Admin panel starting on port {port}")
+def _load_vip():
+    """Load VIP user list from file."""
+    global VIP_USERS
+    try:
+        if os.path.exists(VIP_FILE):
+            with open(VIP_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                VIP_USERS = set(data)
+    except Exception as e:
+        logger.error(f"Failed to load VIP: {e}")
+        VIP_USERS = set()
 
 
-def start_keepalive():
-    """Keepalive thread: auto-ping /health to prevent Railway sleep"""
-    if not config.ENABLE_KEEPALIVE:
+def _store_url(url):
+    """Store URL and return a short key. Telegram callback data that exceeds Telegram 64-byte limit."""
+    global url_counter, url_last_cleanup
+    url_counter += 1
+    key = str(url_counter)
+    url_store[key] = url
+    # Cleanup old entries every 1000 stores
+    if url_counter % 1000 == 0:
+        _cleanup_url_store()
+    return key
+
+
+def _get_url(key):
+    return url_store.get(key, "")
+
+
+def _parse_count_from_title(title):
+    m = re.search(r"(\d+)\s*photos?", title, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"(\d+)\s*[pP张]", title)
+    if m:
+        return int(m.group(1))
+    return 0
+
+
+def _clean_title(title):
+    return re.sub(r"\s*\[[^\]]*\].*$", "", title).strip()
+
+
+def _is_vip(user_id):
+    return user_id in VIP_USERS
+
+
+async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"):
+    try:
+        if isinstance(msg_or_query, Message):
+            await msg_or_query.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        else:
+            await msg_or_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except Exception:
+        pass
+
+
+# ========== Start Menu ==========
+
+START_TEXT = """<b>✨ 美少女图集搜索姬 ✨</b>
+
+👋 主人好呀～我是你的专属图集小助手！
+
+🎀 <b>我能做什么？</b>
+• 🔍 海量 Cosplay、写真、自拍图集随意搜
+• 🎲 不知道看什么？试试随机推荐
+• 👑 VIP 还能翻页浏览 + 下载原图压缩包
+
+💕 资源每日更新，再也不怕片荒啦～
+
+👇 点击下方按钮开始探索吧！"""
+
+START_KEYBOARD = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🔍 搜索图集", callback_data="menu_search")],
+    [InlineKeyboardButton("🎲 随机推荐", callback_data="menu_random")],
+    [InlineKeyboardButton("👑 开通VIP", callback_data="menu_vip")],
+])
+
+VIP_TEXT = """<b>👑 VIP 会员说明</b>
+
+🎯 <b>VIP 特权：</b>
+• 无限次搜索
+• 查看完整大图集
+• 翻页浏览所有图片
+• 📦 原图压缩包下载（含解压密码）
+• 优先体验新功能
+
+🚧 功能开发中，敬请期待～"""
+
+
+async def cmd_start(update, context):
+    user_id = update.effective_user.id
+    user_waiting_search.discard(user_id)
+    await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
+    await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
+
+
+async def cmd_setvip(update, context):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return  # silently ignore
+    if not context.args:
+        await update.message.reply_text("用法: /setvip <用户ID>")
         return
-    def _ping():
-        while not _shutdown_flag.is_set():
-            time.sleep(config.KEEPALIVE_INTERVAL)
+    try:
+        target = int(context.args[0])
+        VIP_USERS.add(target)
+        _save_vip()
+        await update.message.reply_text(f"✅ 已将用户 {target} 设为VIP")
+        logger.info(f"VIP added: {target}")
+    except ValueError:
+        await update.message.reply_text("用户ID必须是数字")
+
+
+async def cmd_help(update, context):
+    await update.message.reply_text(
+        "<b>📖 使用帮助</b>\n\n"
+        "点击「🔍 搜索图集」后直接输入关键词即可\n"
+        "/search 关键词 - 快速搜索\n"
+        "/random - 随机推荐\n"
+        "/start - 回到主菜单",
+        parse_mode="HTML"
+    )
+
+
+async def cmd_search(update, context):
+    user_id = update.effective_user.id
+    if not context.args:
+        user_waiting_search.add(user_id)
+        await update.message.reply_text(
+            "🔍 请直接输入搜索关键词～\n\n"
+            "比如：jk、黑丝、萝莉、御姐、学妹、少妇、自拍...",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+            ]])
+        )
+        return
+    keyword = " ".join(context.args)
+    await _do_search(update, keyword)
+
+
+async def cmd_random(update, context):
+    user_id = update.effective_user.id
+    user_waiting_search.discard(user_id)
+    msg = await update.message.reply_text("🎲 正在随机推荐...")
+    try:
+        gallery = get_random_gallery()
+    except Exception as e:
+        logger.error(f"Random error: {traceback.format_exc()}")
+        await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
+        return
+    if not gallery:
+        await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
+        return
+    await msg.delete()
+    await _send_gallery_detail(update, gallery["url"])
+
+
+# ========== Handle Bottom Keyboard Buttons ==========
+
+async def handle_text(update, context):
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+
+    if text == "🔍 搜索图集":
+        user_waiting_search.add(user_id)
+        await update.message.reply_text(
+            "🔍 请直接输入搜索关键词～\n\n"
+            "比如：jk、黑丝、萝莉、御姐、学妹、少妇、自拍...",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+            ]])
+        )
+        return
+    elif text == "🎲 随机推荐":
+        await cmd_random(update, context)
+        return
+    elif text == "👑 开通VIP":
+        await update.message.reply_text(VIP_TEXT, parse_mode="HTML")
+        return
+    elif text == "❓ 帮助":
+        await cmd_help(update, context)
+        return
+
+    if user_id not in user_waiting_search:
+        return
+    user_waiting_search.discard(user_id)
+    keyword = text
+    if not keyword:
+        await update.message.reply_text("⚠️ 请输入搜索关键词～")
+        user_waiting_search.add(user_id)
+        return
+    await _do_search(update, keyword)
+
+
+async def _do_search(update, keyword):
+    user_id = update.effective_user.id
+    _cleanup_user_state(user_id)
+    msg = await update.message.reply_text(f"🔍 正在搜索: <b>{keyword}</b>...", parse_mode="HTML")
+    try:
+        results = search_galleries(keyword)
+    except Exception as e:
+        logger.error(f"Search error: {traceback.format_exc()}")
+        await _edit_message(msg, "😔 搜索出错，请稍后再试。")
+        return
+    if not results:
+        await _edit_message(msg,
+            f"😔 没有找到与 <b>{keyword}</b> 相关的图集。\n\n换个关键词试试？",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔍 重新搜索", callback_data="menu_search"),
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
+            ]]))
+        return
+    user_search_state[user_id] = {
+        "page": 0, "keyword": keyword, "results": results, "ts": time.time()
+    }
+    await _show_results_page(msg, user_id)
+
+
+# ========== Menu Callbacks ==========
+
+async def _handle_menu_search(update, context):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_waiting_search.add(user_id)
+    await query.edit_message_text(
+        "🔍 请直接输入搜索关键词～\n\n"
+        "比如：jk、黑丝、萝莉、御姐、学妹、少妇、自拍...",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+        ]]))
+
+
+async def _handle_menu_random(update, context):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_waiting_search.discard(user_id)
+    await query.edit_message_text("🎲 正在为你随机推荐...")
+    try:
+        gallery = get_random_gallery()
+    except Exception:
+        await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
+        return
+    if not gallery:
+        await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
+        return
+    await _send_gallery_detail(update, gallery["url"])
+
+
+async def _handle_menu_vip(update, context):
+    query = update.callback_query
+    await query.edit_message_text(VIP_TEXT, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+        ]]))
+
+
+async def _handle_menu_home(update, context):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_waiting_search.discard(user_id)
+    await query.edit_message_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
+
+
+# ========== Main Callback Handler ==========
+
+async def handle_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    data = query.data
+    logger.info(f"Callback: user={user_id} data={data[:50]}")
+
+    try:
+        if data == "menu_search":
+            await _handle_menu_search(update, context)
+        elif data == "menu_random":
+            await _handle_menu_random(update, context)
+        elif data == "menu_vip":
+            await _handle_menu_vip(update, context)
+        elif data == "menu_home":
+            await _handle_menu_home(update, context)
+        elif data == "noop":
+            return
+        elif data.startswith("p_"):
+            page = int(data.split("_")[1])
+            state = user_search_state.get(user_id)
+            if not state:
+                await query.edit_message_text("⏳ 会话已过期，请重新搜索。")
+                return
+            state["page"] = page
+            await _show_results_page(query, user_id)
+        elif data.startswith("d_"):
+            url = _get_url(data[2:])
+            if not url:
+                await query.edit_message_text("⏳ 链接已过期，请重新搜索。")
+                return
+            loading_msg = await query.message.reply_text("⏳ 正在获取图集详情，请稍候...")
+            await _send_gallery_detail(update, url)
             try:
-                port = os.environ.get("PORT", "8080")
-                url = f"http://127.0.0.1:{port}/health"
-                urllib.request.urlopen(url, timeout=5)
+                await loading_msg.delete()
             except Exception:
                 pass
-    t = threading.Thread(target=_ping, daemon=True, name="keepalive")
-    t.start()
-
-
-def build_single_bot(role_id: str, token: str) -> Application:
-    """Build a single role Bot Application"""
-    role = ROLES.get(role_id)
-    if not role:
-        logger.error(f"Role not found: {role_id}")
-        sys.exit(1)
-
-    app = Application.builder().token(token).build()
-    app.bot_data["role_id"] = role_id
-
-    # ── Commands ──
-    app.add_handler(CommandHandler("start", _wrap_handler(cmd_start)))
-    app.add_handler(CommandHandler("checkin", _wrap_handler(cmd_checkin)))
-    app.add_handler(CommandHandler("redeem", _wrap_handler(cmd_redeem)))
-    app.add_handler(CommandHandler("gencode", _wrap_handler(cmd_gencode)))
-    app.add_handler(CommandHandler("gift", _wrap_handler(cmd_gift_status)))
-    app.add_handler(CommandHandler("broadcast", _wrap_handler(cmd_broadcast)))
-    app.add_handler(CommandHandler("stats", _wrap_handler(cmd_stats)))
-    app.add_handler(CommandHandler("userinfo", _wrap_handler(cmd_user_info)))
-    app.add_handler(CommandHandler("setvip", _wrap_handler(cmd_set_vip)))
-    app.add_handler(CommandHandler("orders", _wrap_handler(cmd_yuanwei_orders)))
-    app.add_handler(CommandHandler("announce", _wrap_handler(cmd_announce)))
-    app.add_handler(CommandHandler("clear", _wrap_handler(cmd_clear)))
-    app.add_handler(CommandHandler("export", _wrap_handler(cmd_export)))
-    app.add_handler(CommandHandler("reset", _wrap_handler(cmd_reset)))
-    app.add_handler(CommandHandler("retry", _wrap_handler(cmd_retry)))
-    app.add_handler(CommandHandler("screenshot", _wrap_handler(cmd_screenshot)))
-    app.add_handler(CommandHandler("post", _wrap_handler(cmd_post_testimonial)))
-
-    # ── Conversations ──
-    app.add_handler(get_upload_conversation_handler())
-    app.add_handler(get_yuanwei_conversation_handler())
-    app.add_handler(get_keepsake_conversation_handler())
-
-    # ── Messages ──
-    if config.ENABLE_GROUP_CHAT:
-        app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, handle_group_message))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_media_message))
-    if config.CF_ACCOUNT_ID and config.CF_API_TOKEN:
-        app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice_message))
-
-    # ── Callbacks ──
-    app.add_handler(CallbackQueryHandler(handle_paywall_callback, pattern="^pay_"))
-    app.add_handler(CommandHandler("admin", admin_main))
-    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin:"))
-    app.add_handler(CallbackQueryHandler(handle_yuanwei_callback, pattern="^yw_"))
-    app.add_handler(CallbackQueryHandler(handle_keepsake_callback, pattern="^ks_"))
-    app.add_handler(CallbackQueryHandler(gift_callback, pattern="^gift_"))
-
-    # ── Error ──
-    app.add_error_handler(error_handler)
-
-    return app
-
-
-def _register_global_jobs(app: Application):
-    """Register global (once-per-process) tasks — cleanup, backup, deep dream."""
-    global _global_jobs_registered
-    if _global_jobs_registered:
-        return
-    _global_jobs_registered = True
-    # -- Inactive user cleanup: daily --
-    app.job_queue.run_repeating(
-        lambda ctx: db.cleanup_inactive_users(180),
-        interval=86400,
-        first=3600,
-        name="user_cleanup",
-    )
-
-    # ── DB Backup: every hour ──
-    app.job_queue.run_repeating(
-        lambda ctx: upload_db(config.DB_PATH),
-        interval=3600,
-        first=600,
-        name="db_backup",
-    )
-
-    # ── Deep Dream: nightly at 3am for ALL roles ──
-    import datetime as _dt
-    now = _dt.datetime.now()
-    target = now.replace(hour=3, minute=0, second=0, microsecond=0)
-    if target <= now:
-        target += _dt.timedelta(days=1)
-    first_delay = (target - now).total_seconds()
-    app.job_queue.run_repeating(
-        lambda ctx: _deep_dream_all_roles(ctx),
-        interval=86400,
-        first=int(first_delay),
-        name="deep_dream",
-    )
-
-
-async def _deep_dream_all_roles(context):
-    """Run deep dream for all active roles."""
-    from config import config as _cfg
-    active = _cfg.get_active_bots()
-    for rid in active:
+        elif data.startswith("f_"):
+            url = _get_url(data[2:])
+            if not url:
+                await query.message.reply_text("⏳ 链接已过期，请重新搜索。")
+                return
+            loading_msg = await query.message.reply_text("⏳ 正在加载图片，请稍候...")
+            await _send_gallery_full(update, url)
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
+        elif data.startswith("g_"):
+            parts = data[2:].split("_")
+            url_key = parts[0]
+            page = int(parts[1]) if len(parts) > 1 else 0
+            url = _get_url(url_key)
+            if not url:
+                await query.message.reply_text("⏳ 链接已过期。")
+                return
+            if not _is_vip(user_id):
+                await query.answer("👑 请先开通VIP会员", show_alert=True)
+                return
+            loading_msg = await query.message.reply_text(f"⏳ 正在加载第{page+1}页，请稍候...")
+            await _send_gallery_page(update, url, page)
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
+        elif data.startswith("zip_"):
+            url = _get_url(data[4:])
+            if not url:
+                await query.edit_message_text("⏳ 链接已过期。")
+                return
+            if not _is_vip(user_id):
+                await query.answer("👑 请先开通VIP会员", show_alert=True)
+                return
+            loading_msg = await query.message.reply_text("⏳ 正在获取下载链接...")
+            dl_link = extract_download_link(url)
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
+            if dl_link:
+                text = f'📦 <b>原图压缩包</b>\n\n🔗 <a href="{dl_link}">TeraBox 下载</a>\n\n🔑 解压密码：<code>4KHD</code>'
+            else:
+                text = f'📦 <b>原图压缩包</b>\n\n🔗 <a href="{url}">点击打开原网页</a>\n\n⚠️ 未找到下载链接，请从原网页提取'
+            await query.edit_message_text(
+                text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                ]]))
+        elif data == "vip_upgrade":
+            await query.edit_message_text(VIP_TEXT, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                ]]))
+    except Exception as e:
+        logger.error(f"Callback error: {traceback.format_exc()}")
         try:
-            users = db.get_active_users_for_role(rid)
-            for uid in users[:50]:
-                await summarize_user_conversation(uid, rid)
-        except Exception as e:
-            logger.error(f"Deep Dream job error ({rid}): {e}")
-
-
-async def _deep_dream_job(context, role_id: str):
-    """Legacy single-role deep dream (kept for compatibility)."""
-    await _deep_dream_all_roles(context)
-
-
-async def cmd_announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id not in config.ADMIN_IDS:
-        await update.message.reply_text("⛔ Admin only.")
-        return
-    if not config.ANNOUNCEMENT_CHANNEL:
-        await update.message.reply_text("❌ ANNOUNCEMENT_CHANNEL not configured.")
-        return
-
-    role_id = context.args[0] if context.args else context.bot_data.get("role_id", "xiaolu")
-    if role_id not in ROLES:
-        await update.message.reply_text(f"❌ Unknown role: {role_id}")
-        return
-
-    db.clear_announcement(role_id)
-    app = context.application
-    result = await announce_new_role(app, role_id)
-    if result:
-        await update.message.reply_text(f"✅ {ROLES[role_id]['name']} announcement published!")
-    else:
-        await update.message.reply_text(f"❌ {ROLES[role_id]['name']} announcement failed. Check logs.")
-
-
-# ── Announcement helpers ──
-def _find_reference_photo(role_id: str) -> str | None:
-    # Validate role_id to prevent path traversal
-    if role_id not in ROLES:
-        return None
-    ref_dir = Path(__file__).parent / "media" / role_id / "参考图"
-    if ref_dir.is_dir():
-        photos = [f for f in ref_dir.iterdir() if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")]
-        if photos:
-            return str(random.choice(photos))
-    return None
-
-
-def _build_announce_caption(role: dict) -> str:
-    name = role.get("name", "Unknown")
-    city = role.get("city", "Unknown")
-    age = role.get("age", "?")
-    personality = role.get("personality", "")
-    return (
-        f"🌟 {name} · {age}岁 · {city}\n\n"
-        f"{personality}\n\n"
-        f"💬 点击下方按钮，开始聊天吧～"
-    )
-
-
-async def announce_new_role(app, role_id: str) -> bool:
-    role = ROLES.get(role_id)
-    if not role:
-        return False
-    if not config.ANNOUNCEMENT_CHANNEL:
-        return False
-    if db.is_announced(role_id, config.ANNOUNCEMENT_CHANNEL):
-        return False
-
-    try:
-        me = await app.bot.get_me()
-        bot_link = f"https://t.me/{me.username}"
-    except Exception as e:
-        logger.warning(f"Cannot get bot username for {role_id}: {e}")
-        return False
-
-    photo_path = _find_reference_photo(role_id)
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 开始聊天", url=bot_link)]
-    ])
-    caption = _build_announce_caption(role)
-
-    try:
-        if photo_path and Path(photo_path).is_file():
-            with open(photo_path, "rb") as f:
-                await app.bot.send_photo(
-                    chat_id=config.ANNOUNCEMENT_CHANNEL,
-                    photo=f,
-                    caption=caption,
-                    reply_markup=keyboard,
-                )
-        else:
-            await app.bot.send_message(
-                chat_id=config.ANNOUNCEMENT_CHANNEL,
-                text=caption,
-                reply_markup=keyboard,
-            )
-        db.mark_announced(role_id, config.ANNOUNCEMENT_CHANNEL)
-        name = role.get("name", role_id)
-        logger.info(f"Channel announcement sent: {name} → {config.ANNOUNCEMENT_CHANNEL}")
-        return True
-    except Exception as e:
-        logger.error(f"Announcement failed for {role_id}: {e}", exc_info=True)
-        return False
-
-
-# ── Main ──
-async def main():
-    global _shutdown_flag  # kept for compat
-
-    # ── Config validation (non-fatal) ──
-    errors = validate_config()
-    if errors:
-        logger.warning(f"Starting with {len(errors)} config errors — set env vars in Railway dashboard")
-
-    # ── Graceful shutdown ──
-    import signal as _signal
-
-    def _handle_signal(signum, frame):
-        global _shutdown_flag  # kept for compat
-        logger.info(f"Received signal {signum}, shutting down gracefully...")
-        _shutdown_flag.set()
-        shutdown_event.set()
-
-    _signal.signal(_signal.SIGTERM, _handle_signal)
-    _signal.signal(_signal.SIGINT, _handle_signal)
-
-
-    # -- Healthcheck server starts FIRST (before DB sync) --
-    threading.Thread(target=run_healthcheck, daemon=True).start()
-
-    # ── DB Sync: restore from GitHub on startup ──
-
-    try:
-
-        db_path = config.DB_PATH
-
-        if not os.path.exists(db_path) or os.path.getsize(db_path) < 1024:
-
-            logger.info("DB Sync: Local DB missing/empty, downloading from GitHub...")
-
-            if _db_sync_ok: download_db(db_path)
-
-    except Exception as e:
-
-        logger.error(f"DB Sync startup error: {e}")
-
-
-
-    # ── DB Sync: background upload loop (every 30 min) ──
-
-    if _db_sync_ok:
-        _db_sync_task = asyncio.create_task(sync_loop(config.DB_PATH, 1800))
-
-    logger.info(f"DB Sync: Auto-backup to GitHub every 30 min, path={config.DB_PATH}")
-
-
-
-
-    # ── Keepalive ──
-    start_keepalive()
-
-    # ── Admin panel ──
-    admin_port = int(os.environ.get("ADMIN_PORT", "7860"))
-    start_admin_thread(admin_port)
-
-    # ── Plugins ──
-    await _load_plugins()
-
-    # ── Active bots ──
-    active_bots = config.get_active_bots()
-        # ── Auto VIP: owner always max tier ──
-    OWNER_ID = config.OWNER_ID
-
-    try:
-        db.create_user(OWNER_ID)
-        db.set_vip(OWNER_ID)
-        db.update_profile_tier(OWNER_ID, 1)
-        from roles import ROLES
-        for rid in ROLES:
-            db.set_unlock_tier(OWNER_ID, rid, tier=3, amount=0)
-        logger.info(f"Owner {OWNER_ID}: VIP permanent + all roles tier 3")
-    except Exception as e:
-        logger.error(f"Auto VIP setup failed: {e}")
-
-    logger.info(f"Active bots: {list(active_bots.keys()) if active_bots else 'NONE'}")
-
-    if not active_bots:
-        logger.warning("No bot tokens configured — healthcheck only. Set *_BOT_TOKEN env vars in Railway.")
-        # Keep the event loop alive so healthcheck server stays up
-        await shutdown_event.wait()
-        return
-
-    if config.WEBHOOK_URL:
-        # ── Webhook mode ──
-        apps = {}
-        for role_id, token in active_bots.items():
-            apps[role_id] = build_single_bot(role_id, token)
-
-        # Override the healthcheck handler with bot apps
-        # The healthcheck server is already running; we need to attach apps to it
-        # Find the existing server and set apps
-        port = int(os.environ.get("PORT", "8080"))
-        WebhookHandler.apps = apps
-        WebhookHandler.loop = asyncio.get_running_loop()
-
-        base_url = config.WEBHOOK_URL.rstrip("/")
-        for role_id, app in apps.items():
-            role = ROLES[role_id]
-            webhook_url = f"{base_url}/webhook/{role_id}"
-            await app.initialize()
-            await app.start()
-            await app.bot.set_webhook(url=webhook_url)
-            logger.info(f"{role['name']} webhook set: {webhook_url}")
-
-            # New role channel announcement
-            await announce_new_role(app, role_id)
-
-        # Register global tasks only on the first bot
-        if apps:
-            first_app = list(apps.values())[0]
-            _register_global_jobs(first_app)
-
-        logger.info(f"All {len(apps)} bots running via webhook")
-
-        await shutdown_event.wait()
-    else:
-        # ── Polling mode ──
-        tasks = [run_bot_polling(rid, tok, idx, len(active_bots)) for idx, (rid, tok) in enumerate(active_bots.items())]
-        await asyncio.gather(*tasks)
-
-    # Cleanup
-    if hasattr(db, "conn"):
-        try:
-            db.conn.close()
+            await query.edit_message_text("❌ 操作失败，请重试。")
         except Exception:
             pass
 
 
-# ── Polling mode ──
-async def run_bot_polling(role_id: str, token: str, bot_index: int = 0, total_bots: int = 1):
-    role = ROLES.get(role_id, {"name": role_id})
-    app = build_single_bot(role_id, token)
-    # Register global tasks only on the first bot
-    if bot_index == 0:
-        _register_global_jobs(app)
-    await app.initialize()
-    await app.start()
-    logger.info(f"Polling started: {role['name']} ({role_id})")
-    # Use run_polling pattern to avoid .updater deprecation
-    polling_task = asyncio.create_task(
-        app.updater.start_polling(allowed_updates=["message", "callback_query"])
-    )
-    # Keep alive
-    await shutdown_event.wait()
-    polling_task.cancel()
-    await app.stop()
-    await app.shutdown()
+# ========== Display ==========
+
+async def _show_results_page(msg_or_query, user_id):
+    state = user_search_state.get(user_id)
+    if not state:
+        return
+    results = state["results"]
+    page = state["page"]
+    keyword = state["keyword"]
+    total = len(results)
+    total_pages = max(1, (total + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE)
+    start = page * RESULTS_PER_PAGE
+    end = min(start + RESULTS_PER_PAGE, total)
+    page_results = results[start:end]
+
+    text = f"🔍 <b>{keyword}</b> 共 {total} 个结果（第{page+1}/{total_pages}页）\n\n"
+    buttons = []
+    for i, r in enumerate(page_results):
+        idx = start + i + 1
+        clean_title = _clean_title(r["title"])
+        text += f"{idx}. {clean_title}\n"
+        btn_label = clean_title[:24] + ".." if len(clean_title) > 26 else clean_title[:26]
+        url_key = _store_url(r["url"])
+        buttons.append([InlineKeyboardButton(f"📷 {idx}. {btn_label}", callback_data=f"d_{url_key}")])
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"p_{page-1}"))
+    nav_buttons.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"p_{page+1}"))
+    buttons.append(nav_buttons)
+    buttons.append([
+        InlineKeyboardButton("👑 开通会员", callback_data="menu_vip"),
+        InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
+    ])
+    await _edit_message(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def _send_gallery_detail(update, url, gallery_data=None):
+    user_id = update.effective_user.id
+    logger.info(f"Fetching gallery: {url[:80]}")
+
+    if gallery_data is None:
+        try:
+            gallery_data = get_gallery_images(url)
+        except Exception as e:
+            logger.error(f"Gallery fetch error: {traceback.format_exc()}")
+            await update.effective_message.reply_text("😔 获取图集详情失败，请稍后再试。")
+            return
+
+    title = gallery_data["title"]
+    cover = gallery_data["cover"]
+    cover_bytes = gallery_data.get("cover_bytes")
+    publish_date = gallery_data.get("publish_date", "")
+    all_images = gallery_data["images"]
+
+    track_click(url, title)
+    original_count = _parse_count_from_title(title)
+    display_count = original_count if original_count > 0 else len(all_images)
+    clean_title = _clean_title(title)
+
+    text = f"🎀 {clean_title}\n📸 {display_count}张"
+    if publish_date:
+        text += f"\n🕐 {publish_date}"
+
+    url_key = _store_url(url)
+    buttons = [[InlineKeyboardButton("🖼️ 查看完整图集", callback_data=f"f_{url_key}")]]
+    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    sent = False
+    if cover_bytes:
+        img_data, img_ct = cover_bytes
+        try:
+            img_data.seek(0)
+            await update.effective_message.reply_photo(
+                photo=img_data, caption=text, reply_markup=keyboard, parse_mode="HTML")
+            sent = True
+        except Exception as e:
+            logger.error(f"Cover send failed: {traceback.format_exc()}")
+
+    if not sent and cover:
+        try:
+            await update.effective_message.reply_photo(
+                photo=cover, caption=text, reply_markup=keyboard, parse_mode="HTML")
+            sent = True
+        except Exception as e:
+            logger.error(f"Cover url send failed: {traceback.format_exc()}")
+
+    if not sent:
+        await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+async def _send_gallery_full(update, url):
+    user_id = update.effective_user.id
+    try:
+        gallery_data = get_gallery_images(url)
+    except Exception as e:
+        logger.error(f"Full gallery error: {traceback.format_exc()}")
+        await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+        return
+
+    all_images = gallery_data["images"]
+    total_pages = (len(all_images) + 9) // 10
+    preview = all_images[:10]
+
+    media = []
+    downloaded = 0
+    for img_url in preview:
+        result = download_image(img_url, referer=url)
+        if result:
+            img_data, ct = result
+            img_data.seek(0)
+            media.append(InputMediaPhoto(media=img_data))
+            downloaded += 1
+    if media:
+        try:
+            await update.effective_message.reply_media_group(media=media)
+        except Exception as e:
+            logger.error(f"Media group failed: {traceback.format_exc()}")
+
+    url_key = _store_url(url)
+    buttons = []
+    if _is_vip(user_id):
+        if total_pages > 1:
+            buttons.append([InlineKeyboardButton("➡️ 下一页", callback_data=f"g_{url_key}_1")])
+    else:
+        buttons.append([InlineKeyboardButton("👑 VIP查看完整图集", callback_data="vip_upgrade")])
+    if _is_vip(user_id):
+        buttons.append([InlineKeyboardButton("📦 原图压缩包", callback_data=f"zip_{url_key}")])
+    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
+    keyboard = InlineKeyboardMarkup(buttons)
+    await update.effective_message.reply_text(
+        f"📸 第1/{total_pages}页（{downloaded}张）", reply_markup=keyboard)
+
+
+async def _send_gallery_page(update, url, page=0):
+    user_id = update.effective_user.id
+    if not _is_vip(user_id):
+        return
+    try:
+        gallery_data = get_gallery_images(url)
+    except Exception:
+        await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+        return
+
+    all_images = gallery_data["images"]
+    total_pages = (len(all_images) + 9) // 10
+    start = page * 10
+    end = start + 10
+    page_images = all_images[start:end]
+    if not page_images:
+        await update.effective_message.reply_text("已经是最后一页了～")
+        return
+
+    media = []
+    downloaded = 0
+    for img_url in page_images:
+        result = download_image(img_url, referer=url)
+        if result:
+            img_data, ct = result
+            img_data.seek(0)
+            media.append(InputMediaPhoto(media=img_data))
+            downloaded += 1
+    if media:
+        try:
+            await update.effective_message.reply_media_group(media=media)
+        except Exception as e:
+            logger.error(f"Page media failed: {traceback.format_exc()}")
+
+    url_key = _store_url(url)
+    buttons = []
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"g_{url_key}_{page-1}"))
+    nav.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"g_{url_key}_{page+1}"))
+    buttons.append(nav)
+    buttons.append([InlineKeyboardButton("📦 原图压缩包", callback_data=f"zip_{url_key}")])
+    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
+    keyboard = InlineKeyboardMarkup(buttons)
+    await update.effective_message.reply_text(
+        f"📸 第{page+1}/{total_pages}页（{downloaded}张）", reply_markup=keyboard)
+
+
+# ========== Error Handler ==========
+
+async def error_handler(update, context):
+    logger.error(f"Global error: {context.error}", exc_info=True)
+    if update and isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text("❌ 出错了，请稍后再试。")
+        except Exception:
+            pass
+
+
+# ========== Main ==========
+
+def main():
+    errors = config.validate()
+    if errors:
+        for e in errors:
+            logger.error(f"Config error: {e}")
+        sys.exit(1)
+
+    _load_vip()
+    logger.info(f"Loaded {len(VIP_USERS)} VIP users")
+
+    app = Application.builder().token(config.BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("search", cmd_search))
+    app.add_handler(CommandHandler("random", cmd_random))
+    app.add_handler(CommandHandler("setvip", cmd_setvip))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_error_handler(error_handler)
+
+    # Periodic cleanup task
+    async def _periodic_cleanup(application):
+        while True:
+            await asyncio.sleep(600)  # every 10 minutes
+            _cleanup_all()
+            gc.collect()
+
+    if config.WEBHOOK_URL:
+        logger.info(f"Starting in webhook mode: {config.WEBHOOK_URL}")
+        async def _start_webhook():
+            await app.initialize()
+            await app.start()
+            asyncio.create_task(_periodic_cleanup(app))
+            await app.bot.set_webhook(url=f"{config.WEBHOOK_URL}/webhook")
+            logger.info("Webhook set. Waiting...")
+            await asyncio.Event().wait()
+        asyncio.run(_start_webhook())
+    else:
+        logger.info("Starting in polling mode")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        # Register signal handlers
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, lambda: None)
+            except NotImplementedError:
+                pass
+        asyncio.ensure_future(_periodic_cleanup(app), loop=loop)
+        app.run_polling(allowed_updates=["message", "callback_query"], close_loop=False)
+
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
+    main()
