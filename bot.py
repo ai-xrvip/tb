@@ -226,6 +226,35 @@ async def cmd_setvip(update, context):
         await update.message.reply_text("用户ID必须是数字")
 
 
+async def cmd_my(update, context):
+    user_id = update.effective_user.id
+    if _is_vip(user_id):
+        expiry = VIP_USERS.get(user_id)
+        if expiry is None:
+            info = "永久会员 ♮️"
+        else:
+            from datetime import datetime
+            exp_str = datetime.fromtimestamp(expiry).strftime("%Y年%m月%d日")
+            remaining = max(0, int((expiry - time.time()) / 86400))
+            info = f"到期：{exp_str}  (剩{remaining}天)"
+        await update.message.reply_text(
+            f"👑 <b>你的VIP信息</b>\n\n{info}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔑 续费/升级", callback_data="vip_activate"),
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
+            ]]))
+    else:
+        await update.message.reply_text(
+            "👑 <b>VIP会员</b>\n\n你还不是VIP会员哦～\n开通后可以：\n• 查看全部搜索结果\n• 翻页浏览所有图片\n• 下载原图压缩包",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
+                [InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")],
+                [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")],
+            ]))
+
+
 async def cmd_help(update, context):
     await update.message.reply_text(
         "<b>📖 使用帮助</b>\n\n"
@@ -782,17 +811,23 @@ def main():
     _load_vip()
     logger.info(f"Loaded {len(VIP_USERS)} VIP users")
 
-    async def _clear_commands(app):
-        await app.bot.delete_my_commands()
-        await app.bot.set_my_commands([])
-        logger.info("Bot commands cleared")
+    async def _setup_commands(app):
+        from telegram import BotCommand
+        await app.bot.set_my_commands([
+            BotCommand("start", "🏠 主菜单"),
+            BotCommand("search", "🔍 搜索图集"),
+            BotCommand("random", "🎲 随机推荐"),
+            BotCommand("my", "👑 我的VIP"),
+        ])
+        logger.info("Bot commands set")
 
 
-    app = Application.builder().token(config.BOT_TOKEN).post_init(_clear_commands).build()
+    app = Application.builder().token(config.BOT_TOKEN).post_init(_setup_commands).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("search", cmd_search))
     app.add_handler(CommandHandler("random", cmd_random))
+    app.add_handler(CommandHandler("my", cmd_my))
     app.add_handler(CommandHandler("setvip", cmd_setvip))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
