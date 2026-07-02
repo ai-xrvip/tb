@@ -41,6 +41,8 @@ url_last_cleanup = time.time()
 RESULTS_PER_PAGE = 5
 VIP_USERS = set()
 VIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vip_users.json")
+CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards.json")
+user_waiting_card = set()  # {user_id}
 # Telegram callback data key length is limited to 64 bytes.
 # Use short keys instead of full URLs.
 ADMIN_IDS = {5405770555}
@@ -92,6 +94,25 @@ def _load_vip():
     except Exception as e:
         logger.error(f"Failed to load VIP: {e}")
         VIP_USERS = set()
+
+
+
+def _load_cards() -> dict:
+    try:
+        if os.path.exists(CARD_FILE):
+            with open(CARD_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_cards(cards: dict):
+    try:
+        with open(CARD_FILE, "w", encoding="utf-8") as f:
+            json.dump(cards, f, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Failed to save cards: {e}")
 
 
 def _store_url(url):
@@ -174,6 +195,7 @@ VIP_TEXT = """<b>👑 VIP 会员说明</b>
 async def cmd_start(update, context):
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
+    user_waiting_card.discard(user_id)
     await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
 
@@ -259,10 +281,50 @@ async def handle_text(update, context):
         await cmd_random(update, context)
         return
     elif text == "👑 开通VIP":
-        await update.message.reply_text(VIP_TEXT, parse_mode="HTML")
+        if _is_vip(user_id):
+            await update.message.reply_text(
+                "<b>👑 你已是VIP会员</b>\n\n🎉 享受所有特权～",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                ]]))
+        else:
+            await update.message.reply_text(VIP_TEXT, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
+                    [InlineKeyboardButton("💳 购买卡密", callback_data="vip_buy")],
+                    [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
+                ]))
         return
     elif text == "❓ 帮助":
         await cmd_help(update, context)
+        return
+
+    if user_id in user_waiting_card:
+        user_waiting_card.discard(user_id)
+        card_code = text.strip()
+        cards = _load_cards()
+        if card_code in cards:
+            if cards[card_code].get("used"):
+                await update.message.reply_text("❌ 该卡密已被使用过。")
+            else:
+                cards[card_code]["used"] = True
+                cards[card_code]["used_by"] = user_id
+                _save_cards(cards)
+                VIP_USERS.add(user_id)
+                _save_vip()
+                await update.message.reply_text(
+                    "✅ 卡密激活成功！你现在是VIP会员啦～\n\n返回主菜单即可享受VIP特权！",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                    ]]))
+        else:
+            await update.message.reply_text(
+                "❌ 卡密无效，请检查后重试。",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔑 重新输入", callback_data="vip_activate"),
+                    InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                ]]))
         return
 
     if user_id not in user_waiting_search:
@@ -333,16 +395,28 @@ async def _handle_menu_random(update, context):
 
 async def _handle_menu_vip(update, context):
     query = update.callback_query
+    user_id = update.effective_user.id
+    if _is_vip(user_id):
+        await query.edit_message_text(
+            "<b>👑 你已是VIP会员</b>\n\n🎉 享受所有特权～",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+            ]]))
+        return
     await query.edit_message_text(VIP_TEXT, parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
-        ]]))
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
+            [InlineKeyboardButton("💳 购买卡密", callback_data="vip_buy")],
+            [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
+        ]))
 
 
 async def _handle_menu_home(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
+    user_waiting_card.discard(user_id)
     await query.edit_message_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
 
 
@@ -366,6 +440,20 @@ async def handle_callback(update, context):
             await _handle_menu_home(update, context)
         elif data == "noop":
             return
+        elif data == "vip_activate":
+            user_waiting_card.add(user_id)
+            await query.edit_message_text(
+                "🔑 请输入你的卡密：\n\n格式：直接输入卡密即可",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                ]]))
+        elif data == "vip_buy":
+            await query.edit_message_text(
+                "💳 <b>购买卡密</b>\n\n请联系管理员购买卡密～",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                ]]))
         elif data.startswith("p_"):
             page = int(data.split("_")[1])
             state = user_search_state.get(user_id)
@@ -437,10 +525,21 @@ async def handle_callback(update, context):
                     InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
                 ]]))
         elif data == "vip_upgrade":
-            await query.edit_message_text(VIP_TEXT, parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
-                ]]))
+            user_id = update.effective_user.id
+            if _is_vip(user_id):
+                await query.edit_message_text(
+                    "<b>👑 你已是VIP会员</b>\n\n🎉 享受所有特权～",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                    ]]))
+            else:
+                await query.edit_message_text(VIP_TEXT, parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
+                        [InlineKeyboardButton("💳 购买卡密", callback_data="vip_buy")],
+                        [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
+                    ]))
     except Exception as e:
         logger.error(f"Callback error: {traceback.format_exc()}")
         try:
@@ -666,13 +765,8 @@ def main():
     _load_vip()
     logger.info(f"Loaded {len(VIP_USERS)} VIP users")
 
+    app = Application.builder().token(config.BOT_TOKEN).build()
 
-    async def _clear_commands(app):
-        await app.bot.delete_my_commands()
-        logger.info("Bot commands cleared")
-
-
-    app = Application.builder().token(config.BOT_TOKEN).post_init(_clear_commands).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("search", cmd_search))
