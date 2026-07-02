@@ -301,7 +301,7 @@ async def handle_text(update, context):
             await update.message.reply_text(VIP_TEXT, parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
-                    [InlineKeyboardButton("💳 购买卡密", callback_data="vip_buy")],
+                    [InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")],
                     [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
                 ]))
         return
@@ -431,7 +431,7 @@ async def _handle_menu_vip(update, context):
     await query.edit_message_text(VIP_TEXT, parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
-            [InlineKeyboardButton("💳 购买卡密", callback_data="vip_buy")],
+            [InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")],
             [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
         ]))
 
@@ -471,14 +471,6 @@ async def handle_callback(update, context):
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
                 ]]))
-        elif data == "vip_buy":
-            await query.edit_message_text(
-                "💳 <b>购买卡密</b>\n\n👉 点击下方按钮直接联系客服：",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💬 联系客服购买", url="https://t.me/xiuren88bot?start=buy_524")],
-                    [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
-                ]))
         elif data.startswith("p_"):
             page = int(data.split("_")[1])
             state = user_search_state.get(user_id)
@@ -562,7 +554,7 @@ async def handle_callback(update, context):
                 await query.edit_message_text(VIP_TEXT, parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
-                        [InlineKeyboardButton("💳 购买卡密", callback_data="vip_buy")],
+                        [InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")],
                         [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
                     ]))
     except Exception as e:
@@ -829,7 +821,7 @@ def main():
                                 text=f"⏰ <b>VIP即将到期提醒</b>\n\n你的VIP会员将于 <b>{exp_str}</b> 到期，请及时续费哦～\n\n点击下方按钮续费：",
                                 parse_mode="HTML",
                                 reply_markup=InlineKeyboardMarkup([[
-                                    InlineKeyboardButton("💳 购买卡密", callback_data="vip_buy")
+                                    InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")
                                 ]])
                             )
                         except Exception as e:
