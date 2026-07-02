@@ -526,7 +526,14 @@ async def _handle_menu_home(update, context):
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
     user_waiting_card.discard(user_id)
-    await query.edit_message_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
+    try:
+        await query.edit_message_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
+    except Exception:
+        try:
+            await query.delete_message()
+        except Exception:
+            pass
+        await query.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
 
 
 # ========== Main Callback Handler ==========
