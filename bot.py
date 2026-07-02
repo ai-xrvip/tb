@@ -799,12 +799,34 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
 
-    # Periodic cleanup task
+    # Periodic cleanup + VIP expiry reminder
     async def _periodic_cleanup(application):
+        last_reminder_day = 0
         while True:
             await asyncio.sleep(600)  # every 10 minutes
             _cleanup_all()
             gc.collect()
+            # Check VIP expiry reminders once per day
+            today = time.strftime("%Y%m%d")
+            if today != last_reminder_day:
+                last_reminder_day = today
+                now = time.time()
+                three_days = 3 * 86400
+                for uid, expiry in list(VIP_USERS.items()):
+                    if expiry is not None and 0 < expiry - now <= three_days:
+                        from datetime import datetime
+                        exp_str = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
+                        try:
+                            await application.bot.send_message(
+                                chat_id=uid,
+                                text=f"⏰ <b>VIP即将到期提醒</b>\n\n你的VIP会员将于 <b>{exp_str}</b> 到期，请及时续费哦～\n\n点击下方按钮续费：",
+                                parse_mode="HTML",
+                                reply_markup=InlineKeyboardMarkup([[
+                                    InlineKeyboardButton("💳 购买卡密", callback_data="vip_buy")
+                                ]])
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to send reminder to {uid}: {e}")
 
     if config.WEBHOOK_URL:
         logger.info(f"Starting in webhook mode: {config.WEBHOOK_URL}")
