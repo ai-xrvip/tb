@@ -950,30 +950,19 @@ def main():
             asyncio.run(shutdown(app, "SIGINT"))
     else:
         logger.info("Starting in polling mode")
-
-        async def _run_polling():
-            cleanup_task = asyncio.create_task(_periodic_cleanup(app))
-            try:
-                await app.run_polling(
-                    allowed_updates=["message", "callback_query"],
-                    close_loop=False,
-                    stop_signals=[],
-                )
-            except asyncio.CancelledError:
-                pass
-            finally:
-                cleanup_task.cancel()
-                try:
-                    await cleanup_task
-                except asyncio.CancelledError:
-                    pass
-                await shutdown(app)
-
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.create_task(_periodic_cleanup(app))
         try:
-            asyncio.run(_run_polling())
+            app.run_polling(
+                allowed_updates=["message", "callback_query"],
+                close_loop=False,
+                stop_signals=[],
+            )
         except KeyboardInterrupt:
             logger.info("Received KeyboardInterrupt")
-            # The asyncio.run() already handles cancellation
+        finally:
+            loop.run_until_complete(shutdown(app))
 
 
 if __name__ == "__main__":
