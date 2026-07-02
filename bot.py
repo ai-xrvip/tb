@@ -466,7 +466,7 @@ async def _show_results_page(msg_or_query, user_id):
     end = min(start + RESULTS_PER_PAGE, total)
     page_results = results[start:end]
 
-    text = f"🔍 <b>{keyword}</b> 共 {total} 个结果（第{page+1}/{total_pages}页）"
+    text = f"🔍 <b>{keyword}</b> 共 {total} 个结果（第{page+1}/{full_pages}页）"
     if not is_vip and full_pages > 2:
         text += f"\n\n👑 开通VIP可查看全部{total}条结果"
     text += "\n\n"

@@ -13,7 +13,7 @@ class Config:
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
     
     # Search settings
-    MAX_SEARCH_RESULTS: int = int(os.getenv("MAX_SEARCH_RESULTS", "50"))
+    MAX_SEARCH_RESULTS: int = int(os.getenv("MAX_SEARCH_RESULTS", "999"))
     MAX_PAGES_PER_POST: int = int(os.getenv("MAX_PAGES_PER_POST", "5"))
     MAX_IMAGES_PER_POST: int = int(os.getenv("MAX_IMAGES_PER_POST", "30"))
     

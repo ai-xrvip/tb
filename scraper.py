@@ -131,7 +131,7 @@ def _extract_date(soup: BeautifulSoup) -> str:
     return ""
 
 
-def search_galleries(keyword: str, max_results: int = None, max_pages: int = 10) -> list[dict]:
+def search_galleries(keyword: str, max_results: int = None, max_pages: int = 30) -> list[dict]:
     if max_results is None:
         max_results = config.MAX_SEARCH_RESULTS
 
