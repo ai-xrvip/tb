@@ -46,7 +46,7 @@ VIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vip_users.j
 ADMIN_IDS = {5405770555}
 
 MENU_KEYBOARD = ReplyKeyboardMarkup([
-    [KeyboardButton("✨ 美女图集"), KeyboardButton("🎲 随机推荐")],
+    [KeyboardButton("🔍 搜索图集"), KeyboardButton("🎲 随机推荐")],
     [KeyboardButton("👑 开通VIP"), KeyboardButton("❓ 帮助")],
 ], resize_keyboard=True)
 
@@ -166,7 +166,7 @@ VIP_TEXT = """<b>👑 VIP 会员说明</b>
 • 无限次搜索
 • 查看完整大图集
 • 翻页浏览所有图片
-• 📦 原图压缩包下载（含解压密码）
+• 📦 原图压缩包下载
 • 优先体验新功能
 
 🚧 功能开发中，敬请期待～"""
