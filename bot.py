@@ -46,8 +46,8 @@ VIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vip_users.j
 ADMIN_IDS = {5405770555}
 
 MENU_KEYBOARD = ReplyKeyboardMarkup([
-    [KeyboardButton("🔍 ????"), KeyboardButton("🎲 ????")],
-    [KeyboardButton("👑 ??VIP"), KeyboardButton("❓ ??")],
+    [KeyboardButton("✨ 美女图集"), KeyboardButton("🎲 随机推荐")],
+    [KeyboardButton("👑 开通VIP"), KeyboardButton("❓ 帮助")],
 ], resize_keyboard=True)
 
 
