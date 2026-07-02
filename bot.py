@@ -650,6 +650,17 @@ async def error_handler(update, context):
 
 # ========== Main ==========
 
+async def _post_init(app):
+    from telegram import BotCommand
+    await app.bot.set_my_commands([
+        BotCommand("start", "✨ 主菜单"),
+        BotCommand("search", "🔍 搜索图集"),
+        BotCommand("random", "🎲 随机推荐"),
+        BotCommand("help", "❓ 使用帮助"),
+    ])
+    logger.info("Bot commands set")
+
+
 def main():
     errors = config.validate()
     if errors:
@@ -660,7 +671,7 @@ def main():
     _load_vip()
     logger.info(f"Loaded {len(VIP_USERS)} VIP users")
 
-    app = Application.builder().token(config.BOT_TOKEN).build()
+    app = Application.builder().token(config.BOT_TOKEN).post_init(_post_init).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
