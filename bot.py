@@ -59,6 +59,8 @@ VIP_USERS: dict = {}               # {user_id: expiry_timestamp or None for perm
 VIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vip_users.json")
 CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards.json")
 user_waiting_card: set = set()     # {user_id}
+ALL_USERS: set = set()              # all users who ever used the bot
+USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
 # Per-user rate limiting: {user_id: [timestamp, ...]}
 _user_search_times: dict = defaultdict(list)
 _user_search_lock = Lock()
@@ -119,6 +121,24 @@ def _load_vip():
     except Exception as e:
         logger.error(f"Failed to load VIP: {e}")
         VIP_USERS = {}
+
+
+def _load_users():
+    global ALL_USERS
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, "r", encoding="utf-8") as f:
+                ALL_USERS = set(json.load(f))
+    except Exception:
+        ALL_USERS = set()
+
+
+def _save_users():
+    try:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(ALL_USERS), f)
+    except Exception:
+        pass
 
 
 def _load_cards() -> dict:
@@ -253,6 +273,9 @@ async def cmd_start(update, context):
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
     user_waiting_card.discard(user_id)
+    if user_id not in ALL_USERS:
+        ALL_USERS.add(user_id)
+        _save_users()
     await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
 
@@ -274,6 +297,45 @@ async def cmd_setvip(update, context):
         await update.message.reply_text("用户ID必须是数字")
 
 
+async def cmd_admin(update, context):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    args = context.args
+    if args and args[0] == "setvip" and len(args) > 1:
+        try:
+            target = int(args[1])
+            VIP_USERS[target] = None
+            _save_vip()
+            await update.message.reply_text(f"✅ 已将用户 {target} 设为VIP")
+        except ValueError:
+            await update.message.reply_text("用户ID必须是数字")
+        return
+    # Show admin panel
+    total_vip = len(VIP_USERS)
+    permanent = sum(1 for v in VIP_USERS.values() if v is None)
+    timed = total_vip - permanent
+    cards = _load_cards()
+    total_cards = len(cards)
+    used_cards = sum(1 for c in cards.values() if c.get("used"))
+    from scraper import gallery_clicks, keyword_popularity
+    stats = (
+        "📊 <b>管理员面板</b>\n\n"
+        f"👥 用户: {len(ALL_USERS)} (普通 {len(ALL_USERS - set(VIP_USERS.keys()))})\n"
+        f"👑 VIP: {total_vip} ({permanent}永久 + {timed}限时)\n"
+        f"🔑 卡密: 已用{used_cards}/总计{total_cards}\n"
+        f"🔍 搜索热词: {len(keyword_popularity)}\n"
+        f"📂 点击记录: {len(gallery_clicks)}"
+    )
+    await update.message.reply_text(
+        stats, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ 设置VIP用户", switch_inline_query_current_chat=""),
+            InlineKeyboardButton("🔑 生成卡密", callback_data="admin_gencode")
+        ]])
+    )
+
+
 async def cmd_stats(update, context):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -287,10 +349,11 @@ async def cmd_stats(update, context):
     from scraper import gallery_clicks, keyword_popularity
     stats = (
         "📊 <b>统计数据</b>\n\n"
+        f"👥 用户: {len(ALL_USERS)} (其中普通用户 {len(ALL_USERS - set(VIP_USERS.keys()))})\n"
         f"👑 VIP: {total_vip} ({permanent}永久 + {timed}限时)\n"
         f"🔑 卡密: 已用{used_cards}/总计{total_cards}\n"
         f"🔍 搜索热词: {len(keyword_popularity)}\n"
-        f"📂 点击记录: {len(gallery_clicks)}"
+        f"📈 点击记录: {len(gallery_clicks)}"
     )
     await update.message.reply_text(stats, parse_mode="HTML")
 
@@ -907,7 +970,8 @@ def main():
         sys.exit(1)
 
     _load_vip()
-    logger.info(f"Loaded {len(VIP_USERS)} VIP users")
+    _load_users()
+    logger.info(f"Loaded {len(VIP_USERS)} VIP users, {len(ALL_USERS)} total users")
 
     async def _setup_commands(app):
         from telegram import BotCommand
@@ -927,6 +991,8 @@ def main():
     app.add_handler(CommandHandler("my", cmd_my))
     app.add_handler(CommandHandler("setvip", cmd_setvip))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("admin", cmd_admin))
+    app.add_handler(CommandHandler("setvip", cmd_setvip))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
