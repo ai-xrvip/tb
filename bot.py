@@ -666,8 +666,13 @@ def main():
     _load_vip()
     logger.info(f"Loaded {len(VIP_USERS)} VIP users")
 
-    app = Application.builder().token(config.BOT_TOKEN).build()
 
+    async def _clear_commands(app):
+        await app.bot.delete_my_commands()
+        logger.info("Bot commands cleared")
+
+
+    app = Application.builder().token(config.BOT_TOKEN).post_init(_clear_commands).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("search", cmd_search))
