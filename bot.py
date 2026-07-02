@@ -318,12 +318,14 @@ async def handle_text(update, context):
                 await update.message.reply_text("❌ 该卡密已被使用过。")
             else:
                 card_type = cards[card_code].get("type", "forever")
-                days = {"month": 30, "quarter": 90, "year": 360, "forever": None}
-                day_names = {"month": "月卡(30天)", "quarter": "季卡(90天)", "year": "年卡(360天)", "forever": "永久"}
+                days = {"month": 30, "quarter": 90, "year": 360, "forever": None, "trial": 1}
+                day_names = {"month": "月卡(30天)", "quarter": "季卡(90天)", "year": "年卡(360天)", "forever": "永久", "trial": "体验卡(1天)"}
                 d = days.get(card_type, None)
                 expiry = None if d is None else time.time() + d * 86400
-                cards[card_code]["used"] = True
-                cards[card_code]["used_by"] = user_id
+                is_trial = (card_type == "trial")
+                if not is_trial:
+                    cards[card_code]["used"] = True
+                    cards[card_code]["used_by"] = user_id
                 cards[card_code]["activated_at"] = time.time()
                 _save_cards(cards)
                 VIP_USERS[user_id] = expiry
