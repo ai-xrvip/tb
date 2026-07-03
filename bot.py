@@ -601,6 +601,7 @@ async def handle_text(update, context):
 
     # Search flow
     if user_id not in user_waiting_search:
+        logger.info(f"DEBUG handle_text: user {user_id} NOT in waiting_search, text={text!r}")
         return
     user_waiting_search.discard(user_id)
     keyword = text
@@ -613,6 +614,7 @@ async def handle_text(update, context):
 
 async def _do_search(update, keyword):
     """Search both 4KHD and E-Hentai, merge results by date."""
+    logger.info(f"DEBUG _do_search: keyword={keyword!r}")
     msg = update.message
     loading = await msg.reply_text("🔍 正在搜索中，请稍候...")
 
@@ -630,6 +632,7 @@ async def _do_search(update, keyword):
 
     try:
         merged = await search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS)
+        logger.info(f"DEBUG search returned {len(merged)} results")
     except Exception as e:
         logger.error(f"4KHD search error: {traceback.format_exc()}")
         merged = []
@@ -657,6 +660,7 @@ async def _do_search(update, keyword):
     except Exception:
         pass
 
+    logger.info(f"DEBUG calling _show_results_page with {len(merged)} results")
     await _show_results_page(msg, user_id)
 
 
