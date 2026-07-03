@@ -1,4 +1,4 @@
-"""Configuration for 4KHD Search Bot"""
+﻿"""Configuration for 4KHD Search Bot"""
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -55,7 +55,7 @@ class Config:
         elif "your-" in cls.BOT_TOKEN.lower() or "placeholder" in cls.BOT_TOKEN.lower():
             errors.append("BOT_TOKEN looks like a placeholder")
         if not cls.ADMIN_IDS:
-            errors.append("ADMIN_IDS is empty �?bot will have no admin access")
+            errors.append("ADMIN_IDS is empty — bot will have no admin access")
         return errors
 
 config = Config()
