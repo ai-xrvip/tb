@@ -13,9 +13,9 @@ class Config:
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
 
     # Search settings
-    MAX_SEARCH_RESULTS: int = int(os.getenv("MAX_SEARCH_RESULTS", "999"))
-    MAX_PAGES_PER_POST: int = int(os.getenv("MAX_PAGES_PER_POST", "5"))
-    MAX_IMAGES_PER_POST: int = int(os.getenv("MAX_IMAGES_PER_POST", "30"))
+    MAX_SEARCH_RESULTS: int = int(os.getenv("MAX_SEARCH_RESULTS", "30"))
+    MAX_PAGES_PER_POST: int = int(os.getenv("MAX_PAGES_PER_POST", "3"))
+    MAX_IMAGES_PER_POST: int = int(os.getenv("MAX_IMAGES_PER_POST", "20"))
 
     # Site settings
     BASE_URL: str = "https://www.4khd.com"
@@ -34,12 +34,18 @@ class Config:
 
     # Cache
     CACHE_TTL: int = int(os.getenv("CACHE_TTL", "300"))
+    CACHE_MAX_ENTRIES: int = int(os.getenv("CACHE_MAX_ENTRIES", "500"))
 
     # SSL verification (disable for sites with problematic certs)
     SSL_VERIFY: bool = os.getenv("SSL_VERIFY", "true").lower() in ("true", "1", "yes")
 
     # Rate limiting
     MAX_SEARCHES_PER_MINUTE: int = int(os.getenv("MAX_SEARCHES_PER_MINUTE", "10"))
+
+    # Admin IDs (comma-separated)
+    ADMIN_IDS: set[int] = {
+        int(x.strip()) for x in os.getenv("ADMIN_IDS", "5405770555").split(",") if x.strip()
+    }
 
     @classmethod
     def validate(cls) -> list[str]:
@@ -48,6 +54,8 @@ class Config:
             errors.append("BOT_TOKEN not set in .env")
         elif "your-" in cls.BOT_TOKEN.lower() or "placeholder" in cls.BOT_TOKEN.lower():
             errors.append("BOT_TOKEN looks like a placeholder")
+        if not cls.ADMIN_IDS:
+            errors.append("ADMIN_IDS is empty — bot will have no admin access")
         return errors
 
 config = Config()

@@ -1,4 +1,4 @@
-﻿"""Gallery Search Bot - Telegram Bot"""
+﻿"""Gallery Search Bot - Telegram Bot (async)"""
 import asyncio
 import logging
 import sys
@@ -6,11 +6,10 @@ import os
 import traceback
 import json
 import re
-import time
-import gc
 import html
 import secrets
 import string
+import gc
 from datetime import datetime
 from collections import defaultdict
 from logging.handlers import RotatingFileHandler
@@ -65,38 +64,54 @@ CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards.json
 user_waiting_card: set = set()     # {user_id}
 ALL_USERS: set = set()              # all users who ever used the bot
 USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
+
+# Async locks for thread-safe state access
+_state_lock = asyncio.Lock()
+_url_store_lock = asyncio.Lock()
+_url_counter_lock = asyncio.Lock()
+
 # Per-user rate limiting: {user_id: [timestamp, ...]}
 _user_search_times: dict = defaultdict(list)
 _user_search_lock = Lock()
 
-ADMIN_IDS = {5405770555}
+ADMIN_IDS = config.ADMIN_IDS
 
 MENU_KEYBOARD = ReplyKeyboardMarkup([
     [KeyboardButton("🔍 搜索"), KeyboardButton("🎲 推荐"), KeyboardButton("👑 VIP"), KeyboardButton("👤 我的")],
 ], resize_keyboard=True)
 
+_THREE_DAYS = 3 * 86400
+
+
 # ========== State Helpers ==========
+
+def _now():
+    return datetime.now().timestamp()
+
 
 def _cleanup_url_store():
     """Remove URL entries older than URL_TTL to prevent memory leaks."""
     global url_store
-    now = time.time()
+    now = _now()
     url_store = {k: v for k, v in url_store.items() if now - v.get("ts", 0) < URL_TTL}
+
 
 def _cleanup_user_state(user_id):
     """Remove expired user search state."""
     if user_id in user_search_state:
         ts = user_search_state[user_id].get("ts", 0)
-        if time.time() - ts > USER_STATE_TTL:
+        if _now() - ts > USER_STATE_TTL:
             del user_search_state[user_id]
+
 
 def _cleanup_all():
     """Periodic cleanup of all state stores."""
-    now = time.time()
+    now = _now()
     stale_users = [uid for uid, s in user_search_state.items() if now - s.get("ts", 0) > USER_STATE_TTL]
     for uid in stale_users:
         del user_search_state[uid]
     _cleanup_url_store()
+
 
 def _save_vip():
     """Save VIP user list to file."""
@@ -105,6 +120,7 @@ def _save_vip():
             json.dump(VIP_USERS, f)
     except Exception as e:
         logger.error(f"Failed to save VIP: {e}")
+
 
 def _load_vip():
     """Load VIP user list from file."""
@@ -121,6 +137,7 @@ def _load_vip():
         logger.error(f"Failed to load VIP: {e}")
         VIP_USERS = {}
 
+
 def _load_users():
     global ALL_USERS
     try:
@@ -130,12 +147,14 @@ def _load_users():
     except Exception:
         ALL_USERS = set()
 
+
 def _save_users():
     try:
         with open(USERS_FILE, "w", encoding="utf-8") as f:
             json.dump(list(ALL_USERS), f)
     except Exception:
         pass
+
 
 def _load_cards() -> dict:
     try:
@@ -146,6 +165,7 @@ def _load_cards() -> dict:
         pass
     return {}
 
+
 def _save_cards(cards: dict):
     try:
         with open(CARD_FILE, "w", encoding="utf-8") as f:
@@ -153,29 +173,34 @@ def _save_cards(cards: dict):
     except Exception as e:
         logger.error(f"Failed to save cards: {e}")
 
-def _store_url(url):
+
+async def _store_url(url):
     """Store URL with timestamp and return a short key."""
     global url_counter
-    url_counter += 1
-    key = str(url_counter)
-    url_store[key] = {"url": url, "ts": time.time()}
-    if url_counter % 1000 == 0:
-        _cleanup_url_store()
+    async with _url_counter_lock:
+        url_counter += 1
+        key = str(url_counter)
+    async with _url_store_lock:
+        url_store[key] = {"url": url, "ts": _now()}
+        if url_counter % 1000 == 0:
+            _cleanup_url_store()
     return key
+
 
 def _get_url(key):
     entry = url_store.get(key)
     if not entry:
         return ""
     # Check TTL
-    if time.time() - entry.get("ts", 0) > URL_TTL:
+    if _now() - entry.get("ts", 0) > URL_TTL:
         del url_store[key]
         return ""
     return entry["url"]
 
+
 def _check_rate_limit(user_id: int) -> bool:
     """Check if user has exceeded the rate limit. Returns True if allowed."""
-    now = time.time()
+    now = _now()
     cutoff = now - RATE_LIMIT_WINDOW
     with _user_search_lock:
         times = _user_search_times[user_id]
@@ -187,6 +212,7 @@ def _check_rate_limit(user_id: int) -> bool:
         _user_search_times[user_id].append(now)
         return True
 
+
 def _parse_count_from_title(title):
     m = re.search(r"(\d+)\s*photos?", title, re.IGNORECASE)
     if m:
@@ -196,26 +222,26 @@ def _parse_count_from_title(title):
         return int(m.group(1))
     return 0
 
+
 def _clean_title(title):
     """Clean title: remove size tags but preserve author/tag brackets."""
-    # Only remove brackets that contain size info (e.g. [38MB-43photos], [1.31GB-223photos])
-    # or are at the very end with typical metadata patterns
-    title = re.sub(r"\s*\[\d+[^\]]*(?:MB|GB|photos?|\u5f20)[^\]]*\]", "", title)
-    # Also remove trailing tag spam from EH titles (long tag lists after the main title)
-    # EH titles often end with f:tag1f:tag2... - remove those
+    title = re.sub(r"\s*\[\d+[^\]]*(?:MB|GB|photos?|张)[^\]]*\]", "", title)
     title = re.sub(r"\s*f:[a-z ]+$", "", title)
     return title.strip()
+
+
 def _is_vip(user_id):
     if user_id not in VIP_USERS:
         return False
     expiry = VIP_USERS[user_id]
     if expiry is None:
         return True  # permanent
-    if time.time() > expiry:
+    if _now() > expiry:
         del VIP_USERS[user_id]
         _save_vip()
         return False
     return True
+
 
 async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"):
     try:
@@ -224,10 +250,10 @@ async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"
         else:
             await msg_or_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except Exception as e:
-        # "Message is not modified" is common and harmless; log others
         err_str = str(e)
         if "not modified" not in err_str.lower():
             logger.warning(f"_edit_message failed: {err_str}")
+
 
 # ========== Start Menu ==========
 
@@ -255,10 +281,10 @@ VIP_TEXT = """<b>👑 VIP 会员说明</b>
 • 无限次搜索
 • 查看完整大图集
 • 翻页浏览所有图片
-• 原图压缩包下载
 • 优先体验新功能
 
 🚧 功能开发中，敬请期待～"""
+
 
 async def cmd_start(update, context):
     user_id = update.effective_user.id
@@ -270,10 +296,11 @@ async def cmd_start(update, context):
     await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
 
+
 async def cmd_setvip(update, context):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        return  # silently ignore
+        return
     if not context.args:
         await update.message.reply_text("用法: /setvip <用户ID>")
         return
@@ -286,6 +313,7 @@ async def cmd_setvip(update, context):
     except ValueError:
         await update.message.reply_text("用户ID必须是数字")
 
+
 async def cmd_admin(update, context):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -296,13 +324,14 @@ async def cmd_admin(update, context):
             target = int(args[1])
             VIP_USERS[target] = None
             _save_vip()
-            await update.message.reply_text(f"\u2705 \u5df2\u5c06\u7528\u6237 {target} \u8bbe\u4e3aVIP")
+            await update.message.reply_text(f"✅ 已将用户 {target} 设为VIP")
         except ValueError:
-            await update.message.reply_text("\u7528\u6237ID\u5fc5\u987b\u662f\u6570\u5b57")
+            await update.message.reply_text("用户ID必须是数字")
         return
-    # Reload and clean expired VIPs
+
+    # Ensure VIP file is loaded and clean expired
     _load_vip()
-    now = time.time()
+    now = _now()
     expired = [uid for uid, exp in list(VIP_USERS.items()) if exp is not None and now > exp]
     for uid in expired:
         del VIP_USERS[uid]
@@ -314,50 +343,55 @@ async def cmd_admin(update, context):
     cards = _load_cards()
     total_cards = len(cards)
     used_cards = sum(1 for c in cards.values() if c.get("used"))
+
+    # Import stats from scraper
     from scraper import gallery_clicks, keyword_popularity
     regular_users = [uid for uid in ALL_USERS if uid not in VIP_USERS]
     vip_users_list = [uid for uid in VIP_USERS if uid not in ADMIN_IDS]
-    lines = []
-    lines.append("\U0001f4ca <b>\u7ba1\u7406\u5458\u9762\u677f</b>")
-    lines.append("")
-    lines.append("\U0001f465 \u603b\u7528\u6237: " + str(len(ALL_USERS)))
-    lines.append("   \u666e\u901a\u7528\u6237: " + str(len(regular_users)))
-    lines.append("   VIP\u7528\u6237: " + str(total_vip) + " (" + str(permanent) + "\u6c38\u4e45 + " + str(timed) + "\u9650\u65f6)")
-    lines.append("")
-    lines.append("\U0001f3ab \u5361\u5bc6: \u5df2\u7528" + str(used_cards) + "/\u603b\u8ba1" + str(total_cards))
-    lines.append("\U0001f50d \u641c\u7d22\u70ed\u8bcd: " + str(len(keyword_popularity)))
-    lines.append("\U0001f4c8 \u70b9\u51fb\u8bb0\u5f55: " + str(len(gallery_clicks)))
+
+    stats_text = (
+        "📊 <b>管理员面板</b>\n\n"
+        f"👥 总用户: {len(ALL_USERS)}\n"
+        f"   普通用户: {len(regular_users)}\n"
+        f"   VIP用户: {total_vip} ({permanent}永久 + {timed}限时)\n\n"
+        f"🔑 卡密: 已用{used_cards}/总计{total_cards}\n"
+        f"🔍 搜索热词: {len(keyword_popularity)}\n"
+        f"📈 点击记录: {len(gallery_clicks)}"
+    )
+
     if vip_users_list:
-        lines.append("")
-        lines.append("<b>\U0001f451 VIP\u7528\u6237\u5217\u8868:</b>")
+        stats_text += "\n\n<b>👑 VIP用户列表:</b>\n"
         for uid in vip_users_list[:10]:
             exp = VIP_USERS.get(uid)
             if exp is None:
-                exp_str = "\u6c38\u4e45"
+                exp_str = "永久"
             else:
                 exp_str = datetime.fromtimestamp(exp).strftime("%m-%d")
-            lines.append("  \u2022 " + str(uid) + " (" + exp_str + ")")
+            stats_text += f"  • {uid} ({exp_str})\n"
         if len(vip_users_list) > 10:
-            lines.append("  ... \u8fd8\u6709 " + str(len(vip_users_list)-10) + " \u4e2a")
+            stats_text += f"  ... 还有 {len(vip_users_list)-10} 个\n"
+
     if regular_users:
-        lines.append("")
-        lines.append("<b>\U0001f465 \u666e\u901a\u7528\u6237\u5217\u8868:</b>")
+        stats_text += "\n<b>👥 普通用户列表:</b>\n"
         for uid in regular_users[:10]:
-            lines.append("  \u2022 " + str(uid))
+            stats_text += f"  • {uid}\n"
         if len(regular_users) > 10:
-            lines.append("  ... \u8fd8\u6709 " + str(len(regular_users)-10) + " \u4e2a")
-    stats = "\n".join(lines)
+            stats_text += f"  ... 还有 {len(regular_users)-10} 个\n"
+
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("\u2705 \u8bbe\u7f6eVIP\u7528\u6237", callback_data="admin_setvip_prompt")],
-        [InlineKeyboardButton("\U0001f3ab \u751f\u6210\u5361\u5bc6", callback_data="admin_gencode")],
-        [InlineKeyboardButton("\U0001f50d \u67e5\u770b\u5168\u90e8\u7528\u6237", callback_data="admin_listusers")],
+        [InlineKeyboardButton("✅ 设置VIP用户", callback_data="admin_setvip_prompt")],
+        [InlineKeyboardButton("🔫 生成卡密", callback_data="admin_gencode")],
+        [InlineKeyboardButton("🔍 查看全部用户", callback_data="admin_listusers")],
     ])
-    await update.message.reply_text(stats, parse_mode="HTML", reply_markup=keyboard)
+    await update.message.reply_text(stats_text, parse_mode="HTML", reply_markup=keyboard)
+
 
 async def cmd_stats(update, context):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         return
+
+    _load_vip()
     total_vip = len(VIP_USERS)
     permanent = sum(1 for v in VIP_USERS.values() if v is None)
     timed = total_vip - permanent
@@ -365,6 +399,7 @@ async def cmd_stats(update, context):
     total_cards = len(cards)
     used_cards = sum(1 for c in cards.values() if c.get("used"))
     from scraper import gallery_clicks, keyword_popularity
+
     stats = (
         "📊 <b>统计数据</b>\n\n"
         f"👥 用户: {len(ALL_USERS)} (其中普通用户 {len(ALL_USERS - set(VIP_USERS.keys()))})\n"
@@ -375,15 +410,16 @@ async def cmd_stats(update, context):
     )
     await update.message.reply_text(stats, parse_mode="HTML")
 
+
 async def cmd_my(update, context):
     user_id = update.effective_user.id
     if _is_vip(user_id):
         expiry = VIP_USERS.get(user_id)
         if expiry is None:
-            info = "永久会员 ♮️"
+            info = "永久会员 ♾️"
         else:
             exp_str = datetime.fromtimestamp(expiry).strftime("%Y年%m月%d日")
-            remaining = max(0, int((expiry - time.time()) / 86400))
+            remaining = max(0, int((expiry - _now()) / 86400))
             info = f"到期：{exp_str}  (剩{remaining}天)"
         await update.message.reply_text(
             f"👑 <b>你的VIP信息</b>\n\n{info}",
@@ -402,6 +438,7 @@ async def cmd_my(update, context):
                 [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")],
             ]))
 
+
 async def cmd_help(update, context):
     await update.message.reply_text(
         "<b>📖 使用帮助</b>\n\n"
@@ -411,6 +448,7 @@ async def cmd_help(update, context):
         "/start - 回到主菜单",
         parse_mode="HTML"
     )
+
 
 async def cmd_search(update, context):
     user_id = update.effective_user.id
@@ -427,12 +465,13 @@ async def cmd_search(update, context):
     keyword = " ".join(context.args)
     await _do_search(update, keyword)
 
+
 async def cmd_random(update, context):
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
     msg = await update.message.reply_text("🎲 正在随机推荐...")
     try:
-        gallery = get_random_gallery()
+        gallery = await get_random_gallery()
     except Exception as e:
         logger.error(f"Random error: {traceback.format_exc()}")
         await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
@@ -442,6 +481,7 @@ async def cmd_random(update, context):
         return
     await msg.delete()
     await _send_gallery_detail(update, gallery["url"])
+
 
 # ========== Handle Bottom Keyboard Buttons ==========
 
@@ -460,11 +500,11 @@ async def handle_text(update, context):
                 ALL_USERS.add(target_id)
                 _save_users()
             await update.message.reply_text(
-                "\u2705 \u5df2\u5c06\u7528\u6237 <code>" + str(target_id) + "</code> \u8bbe\u7f6e\u4e3aVIP\u6c38\u4e45\u4f1a\u5458",
+                f"✅ 已将用户 <code>{target_id}</code> 设置为VIP永久会员",
                 parse_mode="HTML"
             )
         except ValueError:
-            await update.message.reply_text("\u274c \u8bf7\u8f93\u5165\u6709\u6548\u7684\u7528\u6237ID\uff08\u6570\u5b57\uff09")
+            await update.message.reply_text("❌ 请输入有效的用户ID（数字）")
         return
 
     if text == "🔍 搜索":
@@ -500,23 +540,42 @@ async def handle_text(update, context):
         await cmd_my(update, context)
         return
 
+    # Card activation flow
     if user_id in user_waiting_card:
         user_waiting_card.discard(user_id)
+
+        # Rate limit card activation attempts (prevent brute force)
+    if not _is_vip(user_id) and not _check_rate_limit(user_id):
+            await update.message.reply_text(
+                "⏱ 操作太频繁，请稍后再试。"
+            )
+            return
+
         card_code = text.strip()
         cards = _load_cards()
         if card_code in cards:
             if cards[card_code].get("used"):
                 await update.message.reply_text("❌ 该卡密已被使用过。")
             else:
+                # Check if user is already VIP — prevent accidental overwrite
+                if _is_vip(user_id):
+                    await update.message.reply_text(
+                        "❗ 你已经是VIP会员了。如需续费请使用新卡密。",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                        ]])
+                    )
+                    return
+
                 card_type = cards[card_code].get("type", "forever")
                 days = {"month": 30, "quarter": 90, "year": 360, "forever": None, "trial": 1}
                 day_names = {"month": "月卡(30天)", "quarter": "季卡(90天)", "year": "年卡(360天)", "forever": "永久", "trial": "体验卡(1天)"}
                 d = days.get(card_type, None)
-                expiry = None if d is None else time.time() + d * 86400
-                # Mark card as used (including trial, to prevent reuse)
+                expiry = None if d is None else _now() + d * 86400
+                # Mark card as used
                 cards[card_code]["used"] = True
                 cards[card_code]["used_by"] = user_id
-                cards[card_code]["activated_at"] = time.time()
+                cards[card_code]["activated_at"] = _now()
                 _save_cards(cards)
                 VIP_USERS[user_id] = expiry
                 _save_vip()
@@ -540,6 +599,7 @@ async def handle_text(update, context):
                 ]]))
         return
 
+    # Search flow
     if user_id not in user_waiting_search:
         return
     user_waiting_search.discard(user_id)
@@ -550,35 +610,36 @@ async def handle_text(update, context):
         return
     await _do_search(update, keyword)
 
+
 async def _do_search(update, keyword):
     """Search both 4KHD and E-Hentai, merge results by date."""
-    user_id = update.effective_user.id
     msg = update.message
-    # Rate limit for non-VIP users
-    if not _is_vip(user_id):
-        if not _check_rate_limit(user_id):
-            await msg.reply_text(
-                "⚠️ 搜索太频繁啦～请稍后再试（每分钟最多" + str(RATE_LIMIT_MAX) + "次）\n\n👑 VIP用户不限流，开通VIP享受无限搜索！",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("👑 开通VIP", callback_data="menu_vip")
-                ]])
-            )
-            return
-    loading = await msg.reply_text("\U0001f50d \u6b63\u5728\u641c\u7d22 4KHD + E\u7ad9\uff0c\u8bf7\u7a0d\u5019...")
+    loading = await msg.reply_text("🔍 正在搜索 4KHD + E站，请稍候...")
+
+    # Rate limit check
+    user_id = update.effective_user.id
+    if not _is_vip(user_id) and not _check_rate_limit(user_id):
+        await loading.delete()
+        await msg.reply_text(
+            "⏱ 搜索太频繁了，请稍后再试～",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+            ]])
+        )
+        return
 
     # Search 4KHD
     try:
-        hd_results = search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS)
+        hd_results = await search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS)
     except Exception as e:
-        logger.error(f"4KHD search error: {e}")
+        logger.error(f"4KHD search error: {traceback.format_exc()}")
         hd_results = []
 
     # Search E-Hentai
     try:
-        eh_results = search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS)
-        # Get dates for EH results
+        eh_results = await search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS)
     except Exception as e:
-        logger.error(f"EH search error: {e}")
+        logger.error(f"EH search error: {traceback.format_exc()}")
         eh_results = []
 
     # Merge: interleave results (alternating for variety)
@@ -599,19 +660,18 @@ async def _do_search(update, keyword):
 
     if not merged:
         await msg.reply_text(
-            "\U0001f614 \u6ca1\u6709\u627e\u5230\u76f8\u5173\u56fe\u96c6\uff0c\u6362\u4e2a\u5173\u952e\u8bcd\u8bd5\u8bd5\u5427\uff5e",
+            "😔 没有找到相关图集，换个关键词试试吧～",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
             ]])
         )
         return
 
     user_search_state[user_id] = {
-        "page": 0, "keyword": keyword, "results": merged, "ts": time.time()
+        "page": 0, "keyword": keyword, "results": merged, "ts": _now()
     }
     state = user_search_state[user_id]
     await _show_results_page(msg, user_id)
-
 
 
 async def _handle_menu_search(update, context):
@@ -626,13 +686,14 @@ async def _handle_menu_search(update, context):
             InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
         ]]))
 
+
 async def _handle_menu_random(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
     await query.edit_message_text("🎲 正在为你随机推荐...")
     try:
-        gallery = get_random_gallery()
+        gallery = await get_random_gallery()
     except Exception:
         await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
         return
@@ -640,6 +701,7 @@ async def _handle_menu_random(update, context):
         await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
         return
     await _send_gallery_detail(update, gallery["url"])
+
 
 async def _handle_menu_vip(update, context):
     query = update.callback_query
@@ -659,6 +721,7 @@ async def _handle_menu_vip(update, context):
             [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
         ]))
 
+
 async def _handle_menu_home(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
@@ -673,6 +736,7 @@ async def _handle_menu_home(update, context):
             pass
         await query.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
 
+
 # ========== Main Callback Handler ==========
 
 async def handle_callback(update, context):
@@ -680,7 +744,7 @@ async def handle_callback(update, context):
     await query.answer()
     user_id = update.effective_user.id
     data = query.data
-    logger.info(f"Callback: user={user_id} data={data[:50]}")
+    logger.info(f"Callback: user={user_id} data={data[:80]}")
 
     try:
         if data == "menu_search":
@@ -722,9 +786,9 @@ async def handle_callback(update, context):
         elif data.startswith("e_"):
             url = _get_url(data[2:])
             if not url:
-                await query.edit_message_text("\u274c \u94fe\u63a5\u5df2\u8fc7\u671f\uff0c\u8bf7\u91cd\u65b0\u641c\u7d22\u3002")
+                await query.edit_message_text("❌ 链接已过期，请重新搜索。")
                 return
-            loading_msg = await query.message.reply_text("\u23f3 \u6b63\u5728\u83b7\u53d6E\u7ad9\u56fe\u96c6\u8be6\u60c5...")
+            loading_msg = await query.message.reply_text("⏳ 正在获取E站图集详情...")
             await _send_eh_detail(update, url)
             try:
                 await loading_msg.delete()
@@ -743,9 +807,19 @@ async def handle_callback(update, context):
             except Exception:
                 pass
         elif data.startswith("g_"):
-            parts = data[2:].split("_")
-            url_key = parts[0]
-            page = int(parts[1]) if len(parts) > 1 else 0
+            # url_key is everything between "g_" and the last "_page"
+            # Use rsplit to handle keys that might contain underscores
+            payload = data[2:]
+            underscore_pos = payload.rfind("_")
+            if underscore_pos == -1:
+                url_key = payload
+                page = 0
+            else:
+                url_key = payload[:underscore_pos]
+                try:
+                    page = int(payload[underscore_pos + 1:])
+                except ValueError:
+                    page = 0
             url = _get_url(url_key)
             if not url:
                 await query.message.reply_text("⏳ 链接已过期。")
@@ -760,7 +834,6 @@ async def handle_callback(update, context):
             except Exception:
                 pass
         elif data == "vip_upgrade":
-            user_id = update.effective_user.id
             if _is_vip(user_id):
                 await query.edit_message_text(
                     "<b>👑 你已是VIP会员</b>\n\n🎉 享受所有特权～",
@@ -777,15 +850,15 @@ async def handle_callback(update, context):
                     ]))
         elif data == "admin_gencode":
             if user_id not in ADMIN_IDS:
-                await query.answer("\u274c \u65e0\u6743\u9650", show_alert=True)
+                await query.answer("❌ 无权限", show_alert=True)
                 return
             cards = _load_cards()
             generated = []
             types = [
-                ("\U0001f4c5 \u6708\u5361(Y)", "Y", 30),
-                ("\U0001f4c5 \u5b63\u5361(J)", "J", 90),
-                ("\U0001f4c5 \u5e74\u5361(N)", "N", 360),
-                ("\U0001f4c5 \u6c38\u4e45(S)", "S", 0),
+                ("📅 月卡(Y)", "Y", 30),
+                ("📅 季卡(J)", "J", 90),
+                ("📅 年卡(N)", "N", 360),
+                ("📅 永久(S)", "S", 0),
             ]
             for label, prefix, days in types:
                 for _ in range(10):
@@ -793,18 +866,16 @@ async def handle_callback(update, context):
                     cards[code] = {"used": False, "used_by": None, "used_at": None, "type": prefix, "days": days, "created_by": user_id}
                     generated.append(code)
             _save_cards(cards)
-            gen_lines = []
-            gen_lines.append("\U0001f3ab <b>\u5df2\u751f\u6210 40 \u5f20\u5361\u5bc6</b>")
-            gen_lines.append("")
+            gen_lines = ["🔫 <b>已生成 40 张卡密</b>", ""]
             for label, prefix, days in types:
                 type_codes = [c for c in generated if c.startswith(prefix)]
-                gen_lines.append(label + ": " + str(len(type_codes)) + "\u5f20")
+                gen_lines.append(f"{label}: {len(type_codes)}张")
             gen_lines.append("")
-            gen_lines.append("\u5361\u5bc6\u5df2\u4fdd\u5b58\u5230 cards.json\uff0c\u8bf7\u67e5\u770b\u6587\u4ef6\u5bfc\u51fa\u3002")
+            gen_lines.append("卡密已保存到 cards.json，请查看文件导出。")
             gen_text = "\n".join(gen_lines)
             await query.edit_message_text(gen_text, parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("\U0001f519 \u8fd4\u56de\u7ba1\u7406\u9762\u677f", callback_data="admin_back")
+                    InlineKeyboardButton("⬅️ 返回管理员面板", callback_data="admin_back")
                 ]]))
 
         elif data == "admin_back":
@@ -819,49 +890,46 @@ async def handle_callback(update, context):
             from scraper import gallery_clicks, keyword_popularity
             regular_users = [uid for uid in ALL_USERS if uid not in VIP_USERS]
             vip_users_list = [uid for uid in VIP_USERS if uid not in ADMIN_IDS]
-            bl = []
-            bl.append("\U0001f4ca <b>\u7ba1\u7406\u5458\u9762\u677f</b>")
-            bl.append("")
-            bl.append("\U0001f465 \u603b\u7528\u6237: " + str(len(ALL_USERS)))
-            bl.append("   \u666e\u901a\u7528\u6237: " + str(len(regular_users)))
-            bl.append("   VIP\u7528\u6237: " + str(total_vip) + " (" + str(permanent) + "\u6c38\u4e45 + " + str(timed) + "\u9650\u65f6)")
-            bl.append("")
-            bl.append("\U0001f3ab \u5361\u5bc6: \u5df2\u7528" + str(used_cards) + "/\u603b\u8ba1" + str(total_cards))
-            bl.append("\U0001f50d \u641c\u7d22\u70ed\u8bcd: " + str(len(keyword_popularity)))
-            bl.append("\U0001f4c8 \u70b9\u51fb\u8bb0\u5f55: " + str(len(gallery_clicks)))
+
+            stats_text = (
+                "📊 <b>管理员面板</b>\n\n"
+                f"👥 总用户: {len(ALL_USERS)}\n"
+                f"   普通用户: {len(regular_users)}\n"
+                f"   VIP用户: {total_vip} ({permanent}永久 + {timed}限时)\n\n"
+                f"🔑 卡密: 已用{used_cards}/总计{total_cards}\n"
+                f"🔍 搜索热词: {len(keyword_popularity)}\n"
+                f"📈 点击记录: {len(gallery_clicks)}"
+            )
             if vip_users_list:
-                bl.append("")
-                bl.append("<b>\U0001f451 VIP\u7528\u6237:</b>")
+                stats_text += "\n\n<b>👑 VIP用户:</b>\n"
                 for uid in vip_users_list[:5]:
                     exp = VIP_USERS.get(uid)
-                    exp_str = "\u6c38\u4e45" if exp is None else datetime.fromtimestamp(exp).strftime("%m-%d")
-                    bl.append("  \u2022 " + str(uid) + " (" + exp_str + ")")
+                    exp_str = "永久" if exp is None else datetime.fromtimestamp(exp).strftime("%m-%d")
+                    stats_text += f"  • {uid} ({exp_str})\n"
                 if len(vip_users_list) > 5:
-                    bl.append("  ... +" + str(len(vip_users_list)-5))
+                    stats_text += f"  ... +{len(vip_users_list)-5}\n"
             if regular_users:
-                bl.append("")
-                bl.append("<b>\U0001f465 \u666e\u901a\u7528\u6237:</b>")
+                stats_text += "\n<b>👥 普通用户:</b>\n"
                 for uid in regular_users[:5]:
-                    bl.append("  \u2022 " + str(uid))
+                    stats_text += f"  • {uid}\n"
                 if len(regular_users) > 5:
-                    bl.append("  ... +" + str(len(regular_users)-5))
-            stats = "\n".join(bl)
-            await query.edit_message_text(stats, parse_mode="HTML",
+                    stats_text += f"  ... +{len(regular_users)-5}\n"
+            await query.edit_message_text(stats_text, parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("\u2705 \u8bbe\u7f6eVIP\u7528\u6237", callback_data="admin_setvip_prompt")],
-                    [InlineKeyboardButton("\U0001f3ab \u751f\u6210\u5361\u5bc6", callback_data="admin_gencode")],
-                    [InlineKeyboardButton("\U0001f50d \u67e5\u770b\u5168\u90e8\u7528\u6237", callback_data="admin_listusers")],
+                    [InlineKeyboardButton("✅ 设置VIP用户", callback_data="admin_setvip_prompt")],
+                    [InlineKeyboardButton("🔫 生成卡密", callback_data="admin_gencode")],
+                    [InlineKeyboardButton("🔍 查看全部用户", callback_data="admin_listusers")],
                 ]))
 
         elif data == "admin_setvip_prompt":
             if user_id not in ADMIN_IDS:
-                await query.answer("\u274c \u65e0\u6743\u9650", show_alert=True)
+                await query.answer("❌ 无权限", show_alert=True)
                 return
             admin_setvip_state[user_id] = True
             await query.edit_message_text(
-                "\u2705 \u8bf7\u8f93\u5165\u8981\u8bbe\u7f6e\u4e3aVIP\u7684\u7528\u6237ID\uff1a\n\n\u4f8b\u5982\u76f4\u63a5\u53d1\u9001: 123456789",
+                "✅ 请输入要设置为VIP的用户ID：\n\n例如直接发送: 123456789",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("\u274c \u53d6\u6d88", callback_data="admin_back")
+                    InlineKeyboardButton("❌ 取消", callback_data="admin_back")
                 ]])
             )
 
@@ -870,42 +938,30 @@ async def handle_callback(update, context):
                 return
             vip_data = [(uid, VIP_USERS[uid]) for uid in VIP_USERS if uid not in ADMIN_IDS]
             regular = [uid for uid in ALL_USERS if uid not in VIP_USERS]
-            ll = []
-            ll.append("\U0001f4cb <b>\u5168\u90e8\u7528\u6237\u5217\u8868</b>")
-            ll.append("")
-            ll.append("\U0001f451 <b>VIP\u7528\u6237 (" + str(len(vip_data)) + "):</b>")
+            text = "📋 <b>全部用户列表</b>\n\n"
+            text += f"👑 <b>VIP用户 ({len(vip_data)}):</b>\n"
             if vip_data:
                 for uid, exp in vip_data:
                     if exp is None:
-                        exp_str = "\u6c38\u4e45"
+                        exp_str = "永久"
                     else:
-                        rem = max(0, int((exp - time.time()) / 86400))
-                        exp_str = "\u5269" + str(rem) + "\u5929"
-                    ll.append("  \u2022 <code>" + str(uid) + "</code> - " + exp_str)
+                        rem = max(0, int((exp - _now()) / 86400))
+                        exp_str = f"剩{rem}天"
+                    text += f"  • <code>{uid}</code> - {exp_str}\n"
             else:
-                ll.append("  \u6682\u65e0")
-            ll.append("")
-            ll.append("\U0001f465 <b>\u666e\u901a\u7528\u6237 (" + str(len(regular)) + "):</b>")
+                text += "  暂无\n"
+            text += f"\n👥 <b>普通用户 ({len(regular)}):</b>\n"
             if regular:
                 for uid in regular:
-                    ll.append("  \u2022 <code>" + str(uid) + "</code>")
+                    text += f"  • <code>{uid}</code>\n"
             else:
-                ll.append("  \u6682\u65e0")
-            text = "\n".join(ll)
+                text += "  暂无\n"
             if len(text) > 4000:
-                text = text[:4000] + "\n\n... \u5217\u8868\u8fc7\u957f\u5df2\u622a\u65ad"
+                text = text[:4000] + "\n\n... 列表过长已截断"
             await query.edit_message_text(text, parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("\U0001f519 \u8fd4\u56de\u7ba1\u7406\u9762\u677f", callback_data="admin_back")
+                    InlineKeyboardButton("⬅️ 返回管理员面板", callback_data="admin_back")
                 ]]))
-
-        elif data.startswith("zip_"):
-            if not _is_vip(user_id):
-                await query.answer("\u2699\ufe0f \u8be5\u529f\u80fd\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u656c\u8bf7\u671f\u5f85", show_alert=True)
-                return
-            await query.answer("\u2699\ufe0f \u529f\u80fd\u5f00\u53d1\u4e2d\uff0c\u656c\u8bf7\u671f\u5f85", show_alert=True)
-
-        
 
     except Exception as e:
         logger.error(f"Callback error: {traceback.format_exc()}")
@@ -925,54 +981,60 @@ async def _show_results_page(msg_or_query, user_id):
     page = state["page"]
     keyword = state["keyword"]
     total = len(results)
+
+    # FIX: Consistent page count for display
     full_pages = max(1, (total + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE)
     is_vip = _is_vip(user_id)
-    total_pages = full_pages if is_vip else min(full_pages, 2)
+    # Non-VIP sees only first 2 pages, VIP sees all
+    max_accessible_pages = full_pages if is_vip else min(full_pages, 2)
+    accessible_total = min(total, max_accessible_pages * RESULTS_PER_PAGE)
+
     start = page * RESULTS_PER_PAGE
     end = min(start + RESULTS_PER_PAGE, total)
     page_results = results[start:end]
 
-    text = "\U0001f50d <b>" + html.escape(keyword) + "</b> \u5171 " + str(total) + " \u4e2a\u7ed3\u679c\uff08\u7b2c" + str(page+1) + "/" + str(full_pages) + "\u9875\uff09"
     if not is_vip and full_pages > 2:
-        text += "\n\n\U0001f451 \u5f00\u901aVIP\u53ef\u67e5\u770b\u5168\u90e8" + str(total) + "\u6761\u7ed3\u679c"
-    text += "\n\n"
+        text = f"🔍 <b>{html.escape(keyword)}</b> 共 {total} 个结果（第{page+1}/{full_pages}页）\n\n👑 开通VIP可查看全部{total}条结果\n\n"
+    else:
+        text = f"🔍 <b>{html.escape(keyword)}</b> 共 {total} 个结果（第{page+1}/{full_pages}页）\n\n"
+
     buttons = []
     for i, r in enumerate(page_results):
         idx = start + i + 1
         clean_title = _clean_title(r["title"])
-        source_badge = "\U0001f310" if r.get("source") == "ehentai" else "\U0001f4f7"
-        text += str(idx) + ". " + source_badge + " " + html.escape(clean_title) + "\n"
+        source_badge = "🌐" if r.get("source") == "ehentai" else "📷"
+        text += f"{idx}. {source_badge} {html.escape(clean_title)}\n"
         btn_label = clean_title[:20] + ".." if len(clean_title) > 22 else clean_title[:22]
-        url_key = _store_url(r["url"])
-        # Different callback prefix for EH vs 4KHD
+        url_key = await _store_url(r["url"])
         prefix = "e_" if r.get("source") == "ehentai" else "d_"
-        buttons.append([InlineKeyboardButton(source_badge + " " + str(idx) + ". " + btn_label, callback_data=prefix + url_key)])
+        buttons.append([InlineKeyboardButton(f"{source_badge} {idx}. {btn_label}", callback_data=prefix + url_key)])
 
+    # Pagination buttons — limited by accessible pages, not full_pages
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("\u2b05\ufe0f \u4e0a\u4e00\u9875", callback_data="p_" + str(page-1)))
-    nav_buttons.append(InlineKeyboardButton("\U0001f4cb " + str(page+1) + "/" + str(total_pages), callback_data="noop"))
-    if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("\u27a1\ufe0f \u4e0b\u4e00\u9875", callback_data="p_" + str(page+1)))
+        nav_buttons.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"p_{page-1}"))
+    nav_buttons.append(InlineKeyboardButton(f"📋 {page+1}/{full_pages}", callback_data="noop"))
+    if page < max_accessible_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"p_{page+1}"))
     buttons.append(nav_buttons)
+
     if not is_vip and full_pages > 2:
-        buttons.append([InlineKeyboardButton("\U0001f451 VIP\u67e5\u770b\u5168\u90e8\u641c\u7d22\u7ed3\u679c", callback_data="menu_vip")])
+        buttons.append([InlineKeyboardButton("👑 VIP查看全部搜索结果", callback_data="menu_vip")])
     buttons.append([
-        InlineKeyboardButton("\U0001f451 \u5f00\u901aVIP", callback_data="menu_vip"),
-        InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home"),
+        InlineKeyboardButton("👑 开通VIP", callback_data="menu_vip"),
+        InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
     ])
     await _edit_message(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
-
 
 
 async def _send_eh_detail(update, url):
     """Display E-Hentai gallery detail with magnet links for VIP."""
     user_id = update.effective_user.id
     try:
-        detail = get_ehentai_gallery(url)
+        detail = await get_ehentai_gallery(url)
     except Exception as e:
         logger.error(f"EH detail error: {traceback.format_exc()}")
-        await update.effective_message.reply_text("\u274c \u83b7\u53d6E\u7ad9\u56fe\u96c6\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002")
+        await update.effective_message.reply_text("❌ 获取E站图集失败，请稍后再试。")
         return
 
     title = detail.get("title", "Unknown")
@@ -985,34 +1047,34 @@ async def _send_eh_detail(update, url):
 
     clean_title = _clean_title(title)
 
-    text = "\U0001f310 <b>" + html.escape(clean_title) + "</b>"
+    text = f"🌐 <b>{html.escape(clean_title)}</b>"
     if date_str:
-        text += "\n\U0001f550 " + date_str
+        text += f"\n🕐 {date_str}"
     if pages:
-        text += "\n\U0001f4f8 " + pages + "\u5f20"
+        text += f"\n📸 {pages}张"
     if file_size:
-        text += "\n\U0001f4e6 " + file_size
-    text += "\n\U0001f4cd \u6765\u6e90: E-Hentai"
+        text += f"\n📦 {file_size}"
+    text += "\n📌 来源: E-Hentai"
 
     is_vip = _is_vip(user_id)
     if is_vip and magnets:
-        text += "\n\n\U0001f9f2 <b>\u78c1\u529b\u94fe\u63a5 (" + str(len(magnets)) + "\u4e2a):</b>"
+        text += f"\n\n🧲 <b>磁力链接 ({len(magnets)}个):</b>"
         for i, mag in enumerate(magnets):
             short_mag = mag[:60] + "..." if len(mag) > 60 else mag
-            text += "\n<code>" + html.escape(short_mag) + "</code>"
+            text += f"\n<code>{html.escape(short_mag)}</code>"
     elif not is_vip:
-        text += "\n\n\U0001f451 <b>VIP\u53ef\u67e5\u770b\u78c1\u529b\u94fe\u63a5</b>"
+        text += "\n\n👑 <b>VIP可查看磁力链接</b>"
 
-    url_key = _store_url(url)
+    url_key = await _store_url(url)
     buttons = []
     if is_vip and magnets:
         for i, mag in enumerate(magnets[:5]):
-            label = "\U0001f9f2 \u78c1\u529b" + str(i+1) if len(magnets) > 1 else "\U0001f9f2 \u78c1\u529b\u94fe"
+            label = f"🧲 磁力{i+1}" if len(magnets) > 1 else "🧲 磁力链"
             buttons.append([InlineKeyboardButton(label, url=mag)])
     if not is_vip:
-        buttons.append([InlineKeyboardButton("\U0001f451 \u5f00\u901aVIP\u67e5\u770b\u78c1\u529b\u94fe", callback_data="vip_upgrade")])
-    buttons.append([InlineKeyboardButton("\U0001f517 \u67e5\u770b\u539f\u7f51\u9875", url=url)])
-    buttons.append([InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")])
+        buttons.append([InlineKeyboardButton("👑 开通VIP查看磁力链", callback_data="vip_upgrade")])
+    buttons.append([InlineKeyboardButton("🔗 查看原网页", url=url)])
+    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
 
     keyboard = InlineKeyboardMarkup(buttons)
 
@@ -1044,7 +1106,7 @@ async def _send_gallery_detail(update, url, gallery_data=None):
     logger.info("Fetching gallery: " + url[:80])
     if gallery_data is None:
         try:
-            gallery_data = get_gallery_images(url)
+            gallery_data = await get_gallery_images(url)
         except Exception:
             logger.error("Gallery fetch error: " + traceback.format_exc())
             await update.effective_message.reply_text("😔 获取图集详情失败，请稍后再试。")
@@ -1054,14 +1116,14 @@ async def _send_gallery_detail(update, url, gallery_data=None):
     cover_bytes = gallery_data.get("cover_bytes")
     publish_date = gallery_data.get("publish_date", "")
     all_images = gallery_data["images"]
-    track_click(url, title)
+    await track_click(url, title)
     original_count = _parse_count_from_title(title)
     display_count = original_count if original_count > 0 else len(all_images)
     clean_title = _clean_title(title)
-    text = "🎀 " + html.escape(clean_title) + "\n📸 " + str(display_count) + "张"
+    text = f"🎀 {html.escape(clean_title)}\n📸 {display_count}张"
     if publish_date:
-        text += "\n🕐 " + publish_date
-    url_key = _store_url(url)
+        text += f"\n🕐 {publish_date}"
+    url_key = await _store_url(url)
     buttons = [[InlineKeyboardButton("🖼️ 查看完整图集", callback_data="f_" + url_key)]]
     buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
@@ -1087,7 +1149,7 @@ async def _send_gallery_detail(update, url, gallery_data=None):
 async def _send_gallery_full(update, url):
     user_id = update.effective_user.id
     try:
-        gallery_data = get_gallery_images(url)
+        gallery_data = await get_gallery_images(url)
     except Exception:
         logger.error("Full gallery error: " + traceback.format_exc())
         await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
@@ -1098,7 +1160,7 @@ async def _send_gallery_full(update, url):
     media = []
     downloaded = 0
     for img_url in preview:
-        result = download_image(img_url, referer=url)
+        result = await download_image(img_url, referer=url)
         if result:
             img_data, ct = result
             img_data.seek(0)
@@ -1109,18 +1171,16 @@ async def _send_gallery_full(update, url):
             await update.effective_message.reply_media_group(media=media)
         except Exception:
             logger.error("Media group failed: " + traceback.format_exc())
-    url_key = _store_url(url)
+    url_key = await _store_url(url)
     buttons = []
     if _is_vip(user_id):
         if total_pages > 1:
-            buttons.append([InlineKeyboardButton("➡️ 下一页", callback_data="g_" + url_key + "_1")])
+            buttons.append([InlineKeyboardButton("➡️ 下一页", callback_data=f"g_{url_key}_1")])
     else:
         buttons.append([InlineKeyboardButton("👑 VIP查看完整图集", callback_data="vip_upgrade")])
-    if _is_vip(user_id):
-        buttons.append([InlineKeyboardButton("📦 原图压缩包", callback_data="zip_" + url_key)])
     buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
-    await update.effective_message.reply_text("📸 第1/" + str(total_pages) + "页（" + str(downloaded) + "张）", reply_markup=keyboard)
+    await update.effective_message.reply_text(f"📸 第1/{total_pages}页（{downloaded}张）", reply_markup=keyboard)
 
 
 async def _send_gallery_page(update, url, page=0):
@@ -1128,7 +1188,7 @@ async def _send_gallery_page(update, url, page=0):
     if not _is_vip(user_id):
         return
     try:
-        gallery_data = get_gallery_images(url)
+        gallery_data = await get_gallery_images(url)
     except Exception:
         await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
         return
@@ -1143,7 +1203,7 @@ async def _send_gallery_page(update, url, page=0):
     media = []
     downloaded = 0
     for img_url in page_images:
-        result = download_image(img_url, referer=url)
+        result = await download_image(img_url, referer=url)
         if result:
             img_data, ct = result
             img_data.seek(0)
@@ -1154,19 +1214,18 @@ async def _send_gallery_page(update, url, page=0):
             await update.effective_message.reply_media_group(media=media)
         except Exception:
             logger.error("Page media failed: " + traceback.format_exc())
-    url_key = _store_url(url)
+    url_key = await _store_url(url)
     buttons = []
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ 上一页", callback_data="g_" + url_key + "_" + str(page-1)))
-    nav.append(InlineKeyboardButton("📄 " + str(page+1) + "/" + str(total_pages), callback_data="noop"))
+        nav.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"g_{url_key}_{page-1}"))
+    nav.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="noop"))
     if page < total_pages - 1:
-        nav.append(InlineKeyboardButton("➡️ 下一页", callback_data="g_" + url_key + "_" + str(page+1)))
+        nav.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"g_{url_key}_{page+1}"))
     buttons.append(nav)
-    buttons.append([InlineKeyboardButton("📦 原图压缩包", callback_data="zip_" + url_key)])
     buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
-    await update.effective_message.reply_text("📸 第" + str(page+1) + "/" + str(total_pages) + "页（" + str(downloaded) + "张）", reply_markup=keyboard)
+    await update.effective_message.reply_text(f"📸 第{page+1}/{total_pages}页（{downloaded}张）", reply_markup=keyboard)
 
 
 # ========== Error Handler ==========
@@ -1184,7 +1243,7 @@ async def error_handler(update, context):
 
 async def shutdown(app, signal_str=None):
     if signal_str:
-        logger.info("Received signal " + signal_str + ", shutting down...")
+        logger.info(f"Received signal {signal_str}, shutting down...")
     else:
         logger.info("Shutting down...")
     try:
@@ -1203,7 +1262,7 @@ def main():
         sys.exit(1)
     _load_vip()
     _load_users()
-    logger.info("Loaded " + str(len(VIP_USERS)) + " VIP users, " + str(len(ALL_USERS)) + " total users")
+    logger.info(f"Loaded {len(VIP_USERS)} VIP users, {len(ALL_USERS)} total users")
 
     async def _setup_commands(app):
         from telegram import BotCommand
@@ -1234,18 +1293,17 @@ def main():
             await asyncio.sleep(600)
             _cleanup_all()
             gc.collect()
-            today = time.strftime("%Y%m%d")
+            today = datetime.now().strftime("%Y%m%d")
             if today != last_reminder_day:
                 last_reminder_day = today
-                now = time.time()
-                three_days = 3 * 86400
+                now = _now()
                 for uid, expiry in list(VIP_USERS.items()):
-                    if expiry is not None and 0 < expiry - now <= three_days:
+                    if expiry is not None and 0 < expiry - now <= _THREE_DAYS:
                         exp_str = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
                         try:
                             await application.bot.send_message(
                                 chat_id=uid,
-                                text="⏰ <b>VIP即将到期提醒</b>\n\n你的VIP会员将于 <b>" + exp_str + "</b> 到期，请及时续费哦～",
+                                text=f"⏰ <b>VIP即将到期提醒</b>\n\n你的VIP会员将于 <b>{exp_str}</b> 到期，请及时续费哦～",
                                 parse_mode="HTML",
                                 reply_markup=InlineKeyboardMarkup([[
                                     InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")
@@ -1263,7 +1321,11 @@ def main():
             await app.bot.set_webhook(url=config.WEBHOOK_URL + "/webhook")
             logger.info("Webhook set.")
             try:
-                await asyncio.Event().wait()
+                while True:
+                    await asyncio.sleep(60)
+                    me = await app.bot.get_me()
+                    if not me:
+                        logger.warning("Health check: bot not responding, attempting restart...")
             except asyncio.CancelledError:
                 await shutdown(app)
         try:
@@ -1274,5 +1336,5 @@ def main():
         logger.info("Starting in polling mode")
         app.run_polling(allowed_updates=["message", "callback_query"])
 
+
 if __name__ == "__main__":
-    main()
