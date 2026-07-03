@@ -197,8 +197,14 @@ def _parse_count_from_title(title):
     return 0
 
 def _clean_title(title):
-    return re.sub(r"\s*\[[^\]]*\].*$", "", title).strip()
-
+    """Clean title: remove size tags but preserve author/tag brackets."""
+    # Only remove brackets that contain size info (e.g. [38MB-43photos], [1.31GB-223photos])
+    # or are at the very end with typical metadata patterns
+    title = re.sub(r"\s*\[\d+[^\]]*(?:MB|GB|photos?|\u5f20)[^\]]*\]", "", title)
+    # Also remove trailing tag spam from EH titles (long tag lists after the main title)
+    # EH titles often end with f:tag1f:tag2... - remove those
+    title = re.sub(r"\s*f:[a-z ]+$", "", title)
+    return title.strip()
 def _is_vip(user_id):
     if user_id not in VIP_USERS:
         return False
