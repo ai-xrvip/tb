@@ -25,6 +25,7 @@ from telegram.ext import (
     CallbackQueryHandler, filters, ContextTypes,
 )
 from config import config
+from seed_cards import SEED_CARDS
 from scraper import (
     search_galleries, get_gallery_images, get_random_gallery,
     download_image, track_click,
@@ -163,10 +164,19 @@ def _load_cards() -> dict:
     try:
         if os.path.exists(CARD_FILE):
             with open(CARD_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if data:
+                    return data
     except Exception:
         pass
-    return {}
+    # Seed from built-in cards list if file is empty/missing
+    logger.info("Seeding cards from built-in list")
+    try:
+        with open(CARD_FILE, "w", encoding="utf-8") as f:
+            json.dump(SEED_CARDS, f, ensure_ascii=False)
+    except Exception:
+        pass
+    return dict(SEED_CARDS)
 
 
 def _save_cards(cards: dict):
