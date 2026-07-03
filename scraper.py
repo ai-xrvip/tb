@@ -377,6 +377,43 @@ def extract_download_link(post_url: str) -> str:
     return ""
 
 
+def get_random_gallery() -> Optional[dict]:
+    """Get a random gallery recommendation based on popular clicks and hot keywords."""
+    results = []
+    seen_urls = set()
+    if gallery_clicks:
+        sorted_clicks = sorted(gallery_clicks.items(), key=lambda x: x[1], reverse=True)
+        top_urls = [url for url, _ in sorted_clicks[:5]]
+        random.shuffle(top_urls)
+        for url in top_urls:
+            title = gallery_titles.get(url, "")
+            keywords = title.split()[:3] if title else []
+            kw = " ".join(keywords) if keywords else ""
+            if kw:
+                similar = search_galleries(kw, max_results=3, max_pages=1)
+                for r in similar:
+                    if r["url"] not in seen_urls:
+                        results.append(r)
+                        seen_urls.add(r["url"])
+    hot_kws = get_hot_keywords(top_n=3)
+    for kw in hot_kws:
+        search_results = search_galleries(kw, max_results=10, max_pages=1)
+        for r in search_results:
+            if r["url"] not in seen_urls:
+                results.append(r)
+                seen_urls.add(r["url"])
+    if results:
+        weighted = []
+        for r in results:
+            weight = gallery_clicks.get(r["url"], 0) + 1
+            weighted.extend([r] * weight)
+        return random.choice(weighted)
+    results = search_galleries("cosplay", max_results=30, max_pages=1)
+    if not results:
+        results = search_galleries("", max_results=30, max_pages=1)
+    return random.choice(results) if results else None
+
+
 # ========== E-Hentai ==========
 
 EH_HEADERS = {
