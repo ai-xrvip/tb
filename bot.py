@@ -1,5 +1,5 @@
 ﻿"""Gallery Search Bot - Telegram Bot (async)"""
-import asyncio
+# Version: async-httpx-v2
 import logging
 import sys
 import os
@@ -635,8 +635,9 @@ async def _do_search(update, keyword):
         logger.error(f"4KHD search error: {traceback.format_exc()}")
         hd_results = []
 
-    # Search E-Hentai
+    # Search E-Hentai (with small delay to avoid rate limits)
     try:
+        await asyncio.sleep(0.3)
         eh_results = await search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS)
     except Exception as e:
         logger.error(f"EH search error: {traceback.format_exc()}")
