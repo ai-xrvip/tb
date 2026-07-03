@@ -657,16 +657,8 @@ async def _do_search(update, keyword):
     except Exception as e:
         logger.error(f"XChina search error: {traceback.format_exc()}")
     
-    # Interleave results for variety
-    merged = []
-    i, j = 0, 0
-    while i < len(hd_results) or j < len(xc_results):
-        if i < len(hd_results):
-            merged.append(hd_results[i])
-            i += 1
-        if j < len(xc_results):
-            merged.append(xc_results[j])
-            j += 1
+    # Combine: 4KHD first, then XChina
+    merged = hd_results + xc_results
 
     try:
         await loading.delete()
@@ -1016,7 +1008,7 @@ async def _show_results_page(msg_or_query, user_id):
     for i, r in enumerate(page_results):
         idx = start + i + 1
         clean_title = _clean_title(r["title"])
-        source_badge = "🌐" if r.get("source") == "xchina" else "📷"
+        source_badge = "📷"
         text += f"{idx}. {source_badge} {html.escape(clean_title)}\n"
         btn_label = clean_title[:20] + ".." if len(clean_title) > 22 else clean_title[:22]
         url_key = await _store_url(r["url"])
@@ -1062,7 +1054,6 @@ async def _send_xchina_detail(update, url):
     text = f"🌐 <b>{html.escape(clean_title)}</b>"
     if count:
         text += f"\n📸 {count}P"
-    text += "\n📌 来源: XChina"
 
     url_key = await _store_url(url)
     buttons = []
