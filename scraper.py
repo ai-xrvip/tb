@@ -351,79 +351,190 @@ def get_gallery_images(post_url: str, max_pages: int = None, max_images: int = N
 
 
 def extract_download_link(post_url: str) -> str:
-    """Extract the real TeraBox download link by resolving m.4khd.com short URL."""
+    """Extract download link from post page.
+
+    m.4khd.com is behind Cloudflare JS challenge, so plain requests
+    cannot resolve it. Return the m.4khd short link directly and
+    let the user's browser handle the challenge.
+    """
     r = _fetch(post_url)
     if not r:
         return ""
 
-    # 1. Find the m.4khd.com short link in the post page
     soup = BeautifulSoup(r.text, "html.parser")
     content_area = soup.select_one("article, .entry-content, .post-body, .single-content, main") or soup
-    short_link = ""
+
     for a in content_area.find_all("a", href=True):
         if "m.4khd.com" in a["href"] and "faq" not in a["href"]:
-            short_link = a["href"]
-            break
-    if not short_link:
-        m = re.search(r"https?://m\.4khd\\.com/([a-zA-Z0-9]+)", r.text)
-        if m and m.group(1) != "faq":
-            short_link = m.group(0)
-    if not short_link:
-        return ""
+            logger.info(f"Download link: {a['href']}")
+            return a["href"]
 
-    logger.info(f"Short link: {short_link}")
+    m = re.search(r"https?://m\.4khd\.com/([a-zA-Z0-9]+)", r.text)
+    if m and m.group(1) != "faq":
+        logger.info(f"Download link (regex): {m.group(0)}")
+        return m.group(0)
 
-    # 2. Resolve the short link to get the real TeraBox URL
+    return ""
+
+
+# ========== E-Hentai ==========
+
+EH_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml",
+}
+EH_COOKIES = {"nw": "1", "skip_warning": "1"}
+EH_BASE = "https://e-hentai.org"
+
+
+def search_ehentai(keyword: str, max_results: int = 20) -> list[dict]:
+    """Search E-Hentai and return gallery list with dates."""
+    if max_results is None:
+        max_results = config.MAX_SEARCH_RESULTS
+
+    cache_key = f"eh:{keyword.lower()}"
+    now = time.time()
+    if cache_key in _cache:
+        ts, data = _cache[cache_key]
+        if now - ts < config.CACHE_TTL:
+            return list(data)[:max_results]
+
+    search_url = f"{EH_BASE}/?f_search={urllib.parse.quote(keyword)}"
+    logger.info(f"EH search: {search_url}")
+
     try:
-        r2 = requests.get(short_link, headers=HEADERS, timeout=config.REQUEST_TIMEOUT, verify=config.SSL_VERIFY)
-        if r2.status_code == 200:
-            m2 = re.search(r'https?://www\.terabox\.com[^\s"\'<>]+', r2.text)
-            if m2:
-                terabox_url = m2.group(0).rstrip("\"").rstrip("'")
-                logger.info(f"Resolved to: {terabox_url}")
-                return terabox_url
-            logger.warning("m.4khd page found but no TeraBox URL in response")
-        else:
-            logger.warning(f"m.4khd returned HTTP {r2.status_code}")
+        r = requests.get(search_url, headers=EH_HEADERS, cookies=EH_COOKIES,
+                        timeout=config.REQUEST_TIMEOUT, verify=config.SSL_VERIFY)
+        if r.status_code != 200:
+            logger.warning(f"EH search returned {r.status_code}")
+            return []
     except Exception as e:
-        logger.warning(f"Failed to resolve m.4khd link: {e}")
+        logger.warning(f"EH search error: {e}")
+        return []
 
-    # 3. Fallback: return the short link if resolution fails
-    return short_link
-
-
-def get_random_gallery() -> Optional[dict]:
-    """Get a random gallery recommendation based on popular clicks and hot keywords."""
+    soup = BeautifulSoup(r.text, "html.parser")
     results = []
-    seen_urls = set()
-    if gallery_clicks:
-        sorted_clicks = sorted(gallery_clicks.items(), key=lambda x: x[1], reverse=True)
-        top_urls = [url for url, _ in sorted_clicks[:5]]
-        random.shuffle(top_urls)
-        for url in top_urls:
-            title = gallery_titles.get(url, "")
-            keywords = title.split()[:3] if title else []
-            kw = " ".join(keywords) if keywords else ""
-            if kw:
-                similar = search_galleries(kw, max_results=3, max_pages=1)
-                for r in similar:
-                    if r["url"] not in seen_urls:
-                        results.append(r)
-                        seen_urls.add(r["url"])
-    hot_kws = get_hot_keywords(top_n=3)
-    for kw in hot_kws:
-        search_results = search_galleries(kw, max_results=10, max_pages=1)
-        for r in search_results:
-            if r["url"] not in seen_urls:
-                results.append(r)
-                seen_urls.add(r["url"])
-    if results:
-        weighted = []
-        for r in results:
-            weight = gallery_clicks.get(r["url"], 0) + 1
-            weighted.extend([r] * weight)
-        return random.choice(weighted)
-    results = search_galleries("cosplay", max_results=30, max_pages=1)
-    if not results:
-        results = search_galleries("", max_results=30, max_pages=1)
-    return random.choice(results) if results else None
+    seen = set()
+
+    for a in soup.select(".itg a[href*='/g/']"):
+        href = a.get("href", "")
+        # Only match actual gallery links: /g/{gid}/{token}/
+        if not re.match(r'.*/g/\d+/[a-f0-9]+/?$', href):
+            continue
+        if href in seen:
+            continue
+        seen.add(href)
+        
+        title = a.get_text(strip=True)
+        if not title or len(title) < 5:
+            continue
+        
+        results.append({
+            "title": title,
+            "url": href,
+            "cover": None,
+            "source": "ehentai",
+            "date": "",  # filled in by sorting
+        })
+        
+        if len(results) >= max_results:
+            break
+
+    _cache[cache_key] = (now, results)
+    logger.info(f"EH found {len(results)} results for {keyword!r}")
+    return results
+
+
+def get_ehentai_gallery(gallery_url: str) -> dict:
+    """Get E-Hentai gallery details including torrent/magnet links."""
+    cache_key = f"eh_gallery:{gallery_url}"
+    now = time.time()
+    if cache_key in _cache:
+        ts, data = _cache[cache_key]
+        if now - ts < config.CACHE_TTL:
+            return data
+
+    logger.info(f"EH gallery: {gallery_url}")
+    result = {
+        "title": "", "cover": None, "cover_bytes": None,
+        "date": "", "file_size": "", "pages": "",
+        "magnets": [], "source": "ehentai", "url": gallery_url,
+    }
+
+    try:
+        r = requests.get(gallery_url, headers=EH_HEADERS, cookies=EH_COOKIES,
+                        timeout=config.REQUEST_TIMEOUT, verify=config.SSL_VERIFY)
+        if r.status_code != 200:
+            return result
+    except Exception as e:
+        logger.warning(f"EH gallery error: {e}")
+        return result
+
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    # Title
+    title_el = soup.select_one("#gn") or soup.select_one("#gj") or soup.select_one("h1")
+    if title_el:
+        result["title"] = title_el.text.strip()
+
+    # Date and info
+    for td in soup.select("#gdd td"):
+        text = td.text.strip()
+        if text and ":" in text:
+            key, val = text.split(":", 1)
+            key = key.strip().lower()
+            val = val.strip()
+            if key == "posted":
+                result["date"] = val
+            elif key == "file size":
+                result["file_size"] = val.split("<")[0].strip()
+            elif key == "length":
+                result["pages"] = val.split(" ")[0]
+
+    # Cover image
+    cover_el = soup.select_one("#gd1 img") or soup.select_one(".gm img")
+    if cover_el:
+        src = cover_el.get("src") or cover_el.get("data-src")
+        if src and src.startswith("http"):
+            result["cover"] = src
+            img_result = download_image(src, referer=gallery_url)
+            if img_result:
+                result["cover_bytes"] = img_result
+
+    # Check torrent count
+    torrent_text = ""
+    for p in soup.select("p.g2"):
+        text = p.text
+        if "Torrent Download" in text:
+            torrent_text = text
+            break
+
+    torrent_count = 0
+    m = re.search(r'\((\d+)\)', torrent_text)
+    if m:
+        torrent_count = int(m.group(1))
+
+    # Get magnet links from torrent page
+    if torrent_count > 0:
+        match = re.search(r'/g/(\d+)/([a-f0-9]+)', gallery_url)
+        if match:
+            gid = match.group(1)
+            token = match.group(2)
+            torrent_url = f"{EH_BASE}/gallerytorrents.php?gid={gid}&t={token}"
+            try:
+                r2 = requests.get(torrent_url, headers=EH_HEADERS, cookies=EH_COOKIES,
+                                timeout=config.REQUEST_TIMEOUT, verify=config.SSL_VERIFY)
+                if r2.status_code == 200:
+                    # Extract torrent download links and construct magnet URIs
+                    seen_hashes = set()
+                    for t_link in re.finditer(r'https?://ehtracker\.org/get/\d+/([a-f0-9]{40})\.torrent', r2.text):
+                        info_hash = t_link.group(1)
+                        if info_hash not in seen_hashes:
+                            seen_hashes.add(info_hash)
+                            result["magnets"].append(f"magnet:?xt=urn:btih:{info_hash}")
+            except Exception as e:
+                logger.warning(f"EH torrent page error: {e}")
+
+    _cache[cache_key] = (now, result)
+    return result
+

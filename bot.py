@@ -28,6 +28,7 @@ from config import config
 from scraper import (
     search_galleries, get_gallery_images, get_random_gallery,
     download_image, track_click,
+    search_ehentai, get_ehentai_gallery,
 )
 
 # ---- Logging ----
@@ -543,41 +544,65 @@ async def handle_text(update, context):
         return
     await _do_search(update, keyword)
 
-async def _do_search(update, keyword):
-    user_id = update.effective_user.id
+async def _do_search(update, context, user_id, keyword):
+    """Search both 4KHD and E-Hentai, merge results by date."""
+    msg = update.message
+    loading = await msg.reply_text("\U0001f50d \u6b63\u5728\u641c\u7d22 4KHD + E\u7ad9\uff0c\u8bf7\u7a0d\u5019...")
 
-    # Rate limiting
-    if not _is_vip(user_id) and not _check_rate_limit(user_id):
-        await update.message.reply_text(
-            "⏱️ 操作太快了，请稍后再试～",
+    # Search 4KHD
+    try:
+        hd_results = search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS)
+    except Exception as e:
+        logger.error(f"4KHD search error: {e}")
+        hd_results = []
+
+    # Search E-Hentai
+    try:
+        eh_results = search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS)
+        # Get dates for EH results
+        for r in eh_results:
+            if not r.get("date"):
+                try:
+                    detail = get_ehentai_gallery(r["url"])
+                    r["date"] = detail.get("date", "")
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.error(f"EH search error: {e}")
+        eh_results = []
+
+    # Merge: interleave results (alternating for variety)
+    merged = []
+    i, j = 0, 0
+    while i < len(hd_results) or j < len(eh_results):
+        if i < len(hd_results):
+            merged.append(hd_results[i])
+            i += 1
+        if j < len(eh_results):
+            merged.append(eh_results[j])
+            j += 1
+
+    try:
+        await loading.delete()
+    except Exception:
+        pass
+
+    if not merged:
+        await msg.reply_text(
+            "\U0001f614 \u6ca1\u6709\u627e\u5230\u76f8\u5173\u56fe\u96c6\uff0c\u6362\u4e2a\u5173\u952e\u8bcd\u8bd5\u8bd5\u5427\uff5e",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")
             ]])
         )
         return
 
-    _cleanup_user_state(user_id)
-    msg = await update.message.reply_text(f"🔍 正在搜索: <b>{html.escape(keyword)}</b>...", parse_mode="HTML")
-    try:
-        results = search_galleries(keyword)
-    except Exception as e:
-        logger.error(f"Search error: {traceback.format_exc()}")
-        await _edit_message(msg, "😔 搜索出错，请稍后再试。")
-        return
-    if not results:
-        await _edit_message(msg,
-            f"😔 没有找到与 <b>{html.escape(keyword)}</b> 相关的图集。\n\n换个关键词试试？",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔍 重新搜索", callback_data="menu_search"),
-                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
-            ]]))
-        return
     user_search_state[user_id] = {
-        "page": 0, "keyword": keyword, "results": results, "ts": time.time()
+        "page": 0, "keyword": keyword, "results": merged, "ts": time.time()
     }
+    state = user_search_state[user_id]
     await _show_results_page(msg, user_id)
 
-# ========== Menu Callbacks ==========
+
 
 async def _handle_menu_search(update, context):
     query = update.callback_query
@@ -684,6 +709,18 @@ async def handle_callback(update, context):
                 await loading_msg.delete()
             except Exception:
                 pass
+        elif data.startswith("e_"):
+            url = _get_url(data[2:])
+            if not url:
+                await query.edit_message_text("\u274c \u94fe\u63a5\u5df2\u8fc7\u671f\uff0c\u8bf7\u91cd\u65b0\u641c\u7d22\u3002")
+                return
+            loading_msg = await query.message.reply_text("\u23f3 \u6b63\u5728\u83b7\u53d6E\u7ad9\u56fe\u96c6\u8be6\u60c5...")
+            await _send_eh_detail(update, url)
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
+
         elif data.startswith("f_"):
             url = _get_url(data[2:])
             if not url:
@@ -760,113 +797,15 @@ async def handle_callback(update, context):
                     InlineKeyboardButton("\U0001f519 \u8fd4\u56de\u7ba1\u7406\u9762\u677f", callback_data="admin_back")
                 ]]))
 
-        elif data == "admin_back":
-            if user_id not in ADMIN_IDS:
-                return
-            # Reload and clean expired VIPs
-            _load_vip()
-            now = time.time()
-            expired = [uid for uid, exp in list(VIP_USERS.items()) if exp is not None and now > exp]
-            for uid in expired:
-                del VIP_USERS[uid]
-            if expired:
-                _save_vip()
-            
-            total_vip = len(VIP_USERS)
-            permanent = sum(1 for v in VIP_USERS.values() if v is None)
-            timed = total_vip - permanent
-            cards = _load_cards()
-            total_cards = len(cards)
-            used_cards = sum(1 for c in cards.values() if c.get("used"))
-            from scraper import gallery_clicks, keyword_popularity
-            regular_users = [uid for uid in ALL_USERS if uid not in VIP_USERS]
-            vip_users_list = [uid for uid in VIP_USERS if uid not in ADMIN_IDS]
-            bl = []
-            bl.append("\U0001f4ca <b>\u7ba1\u7406\u5458\u9762\u677f</b>")
-            bl.append("")
-            bl.append("\U0001f465 \u603b\u7528\u6237: " + str(len(ALL_USERS)))
-            bl.append("   \u666e\u901a\u7528\u6237: " + str(len(regular_users)))
-            bl.append("   VIP\u7528\u6237: " + str(total_vip) + " (" + str(permanent) + "\u6c38\u4e45 + " + str(timed) + "\u9650\u65f6)")
-            bl.append("")
-            bl.append("\U0001f3ab \u5361\u5bc6: \u5df2\u7528" + str(used_cards) + "/\u603b\u8ba1" + str(total_cards))
-            bl.append("\U0001f50d \u641c\u7d22\u70ed\u8bcd: " + str(len(keyword_popularity)))
-            bl.append("\U0001f4c8 \u70b9\u51fb\u8bb0\u5f55: " + str(len(gallery_clicks)))
-            if vip_users_list:
-                bl.append("")
-                bl.append("<b>\U0001f451 VIP\u7528\u6237:</b>")
-                for uid in vip_users_list[:5]:
-                    exp = VIP_USERS.get(uid)
-                    exp_str = "\u6c38\u4e45" if exp is None else datetime.fromtimestamp(exp).strftime("%m-%d")
-                    bl.append("  \u2022 " + str(uid) + " (" + exp_str + ")")
-                if len(vip_users_list) > 5:
-                    bl.append("  ... +" + str(len(vip_users_list)-5))
-            if regular_users:
-                bl.append("")
-                bl.append("<b>\U0001f465 \u666e\u901a\u7528\u6237:</b>")
-                for uid in regular_users[:5]:
-                    bl.append("  \u2022 " + str(uid))
-                if len(regular_users) > 5:
-                    bl.append("  ... +" + str(len(regular_users)-5))
-            stats = "\n".join(bl)
-            await query.edit_message_text(stats, parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("\u2705 \u8bbe\u7f6eVIP\u7528\u6237", callback_data="admin_setvip_prompt")],
-                    [InlineKeyboardButton("\U0001f3ab \u751f\u6210\u5361\u5bc6", callback_data="admin_gencode")],
-                    [InlineKeyboardButton("\U0001f50d \u67e5\u770b\u5168\u90e8\u7528\u6237", callback_data="admin_listusers")],
-                ]))
-
-        elif data == "admin_setvip_prompt":
-            if user_id not in ADMIN_IDS:
-                await query.answer("\u274c \u65e0\u6743\u9650", show_alert=True)
-                return
-            admin_setvip_state[user_id] = True
-            await query.edit_message_text(
-                "\u2705 \u8bf7\u8f93\u5165\u8981\u8bbe\u7f6e\u4e3aVIP\u7684\u7528\u6237ID\uff1a\n\n\u4f8b\u5982\u76f4\u63a5\u53d1\u9001: 123456789",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("\u274c \u53d6\u6d88", callback_data="admin_back")
-                ]])
-            )
-
-        elif data == "admin_listusers":
-            if user_id not in ADMIN_IDS:
-                return
-            vip_data = [(uid, VIP_USERS[uid]) for uid in VIP_USERS if uid not in ADMIN_IDS]
-            regular = [uid for uid in ALL_USERS if uid not in VIP_USERS]
-            ll = []
-            ll.append("\U0001f4cb <b>\u5168\u90e8\u7528\u6237\u5217\u8868</b>")
-            ll.append("")
-            ll.append("\U0001f451 <b>VIP\u7528\u6237 (" + str(len(vip_data)) + "):</b>")
-            if vip_data:
-                for uid, exp in vip_data:
-                    if exp is None:
-                        exp_str = "\u6c38\u4e45"
-                    else:
-                        rem = max(0, int((exp - time.time()) / 86400))
-                        exp_str = "\u5269" + str(rem) + "\u5929"
-                    ll.append("  \u2022 <code>" + str(uid) + "</code> - " + exp_str)
-            else:
-                ll.append("  \u6682\u65e0")
-            ll.append("")
-            ll.append("\U0001f465 <b>\u666e\u901a\u7528\u6237 (" + str(len(regular)) + "):</b>")
-            if regular:
-                for uid in regular:
-                    ll.append("  \u2022 <code>" + str(uid) + "</code>")
-            else:
-                ll.append("  \u6682\u65e0")
-            text = "\n".join(ll)
-            if len(text) > 4000:
-                text = text[:4000] + "\n\n... \u5217\u8868\u8fc7\u957f\u5df2\u622a\u65ad"
-            await query.edit_message_text(text, parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("\U0001f519 \u8fd4\u56de\u7ba1\u7406\u9762\u677f", callback_data="admin_back")
-                ]]))
+        
 
     except Exception as e:
         logger.error(f"Callback error: {traceback.format_exc()}")
         try:
-            await query.edit_message_text("❌ 操作失败，请重试。")
+            await query.edit_message_text("操作失败，请重试。")
         except Exception:
             pass
+
 
 # ========== Display ==========
 
@@ -885,64 +824,88 @@ async def _show_results_page(msg_or_query, user_id):
     end = min(start + RESULTS_PER_PAGE, total)
     page_results = results[start:end]
 
-    text = f"🔍 <b>{html.escape(keyword)}</b> 共 {total} 个结果（第{page+1}/{full_pages}页）"
+    text = "\U0001f50d <b>" + html.escape(keyword) + "</b> \u5171 " + str(total) + " \u4e2a\u7ed3\u679c\uff08\u7b2c" + str(page+1) + "/" + str(full_pages) + "\u9875\uff09"
     if not is_vip and full_pages > 2:
-        text += f"\n\n👑 开通VIP可查看全部{total}条结果"
+        text += "\n\n\U0001f451 \u5f00\u901aVIP\u53ef\u67e5\u770b\u5168\u90e8" + str(total) + "\u6761\u7ed3\u679c"
     text += "\n\n"
     buttons = []
     for i, r in enumerate(page_results):
         idx = start + i + 1
         clean_title = _clean_title(r["title"])
-        text += f"{idx}. {html.escape(clean_title)}\n"
-        btn_label = clean_title[:24] + ".." if len(clean_title) > 26 else clean_title[:26]
+        source_badge = "\U0001f310" if r.get("source") == "ehentai" else "\U0001f4f7"
+        text += str(idx) + ". " + source_badge + " " + html.escape(clean_title) + "\n"
+        btn_label = clean_title[:20] + ".." if len(clean_title) > 22 else clean_title[:22]
         url_key = _store_url(r["url"])
-        buttons.append([InlineKeyboardButton(f"📷 {idx}. {btn_label}", callback_data=f"d_{url_key}")])
+        # Different callback prefix for EH vs 4KHD
+        prefix = "e_" if r.get("source") == "ehentai" else "d_"
+        buttons.append([InlineKeyboardButton(source_badge + " " + str(idx) + ". " + btn_label, callback_data=prefix + url_key)])
 
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"p_{page-1}"))
-    nav_buttons.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="noop"))
+        nav_buttons.append(InlineKeyboardButton("\u2b05\ufe0f \u4e0a\u4e00\u9875", callback_data="p_" + str(page-1)))
+    nav_buttons.append(InlineKeyboardButton("\U0001f4cb " + str(page+1) + "/" + str(total_pages), callback_data="noop"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"p_{page+1}"))
+        nav_buttons.append(InlineKeyboardButton("\u27a1\ufe0f \u4e0b\u4e00\u9875", callback_data="p_" + str(page+1)))
     buttons.append(nav_buttons)
     if not is_vip and full_pages > 2:
-        buttons.append([InlineKeyboardButton("👑 VIP查看全部搜索结果", callback_data="menu_vip")])
+        buttons.append([InlineKeyboardButton("\U0001f451 VIP\u67e5\u770b\u5168\u90e8\u641c\u7d22\u7ed3\u679c", callback_data="menu_vip")])
     buttons.append([
-        InlineKeyboardButton("👑 开通VIP", callback_data="menu_vip"),
-        InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
+        InlineKeyboardButton("\U0001f451 \u5f00\u901aVIP", callback_data="menu_vip"),
+        InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home"),
     ])
     await _edit_message(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
 
-async def _send_gallery_detail(update, url, gallery_data=None):
+
+
+async def _send_eh_detail(update, url):
+    """Display E-Hentai gallery detail with magnet links for VIP."""
     user_id = update.effective_user.id
-    logger.info(f"Fetching gallery: {url[:80]}")
+    try:
+        detail = get_ehentai_gallery(url)
+    except Exception as e:
+        logger.error(f"EH detail error: {traceback.format_exc()}")
+        await update.effective_message.reply_text("\u274c \u83b7\u53d6E\u7ad9\u56fe\u96c6\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002")
+        return
 
-    if gallery_data is None:
-        try:
-            gallery_data = get_gallery_images(url)
-        except Exception as e:
-            logger.error(f"Gallery fetch error: {traceback.format_exc()}")
-            await update.effective_message.reply_text("😔 获取图集详情失败，请稍后再试。")
-            return
+    title = detail.get("title", "Unknown")
+    cover = detail.get("cover")
+    cover_bytes = detail.get("cover_bytes")
+    date_str = detail.get("date", "")
+    file_size = detail.get("file_size", "")
+    pages = detail.get("pages", "")
+    magnets = detail.get("magnets", [])
 
-    title = gallery_data["title"]
-    cover = gallery_data["cover"]
-    cover_bytes = gallery_data.get("cover_bytes")
-    publish_date = gallery_data.get("publish_date", "")
-    all_images = gallery_data["images"]
-
-    track_click(url, title)
-    original_count = _parse_count_from_title(title)
-    display_count = original_count if original_count > 0 else len(all_images)
     clean_title = _clean_title(title)
 
-    text = f"🎀 {html.escape(clean_title)}\n📸 {display_count}张"
-    if publish_date:
-        text += f"\n🕐 {publish_date}"
+    text = "\U0001f310 <b>" + html.escape(clean_title) + "</b>"
+    if date_str:
+        text += "\n\U0001f550 " + date_str
+    if pages:
+        text += "\n\U0001f4f8 " + pages + "\u5f20"
+    if file_size:
+        text += "\n\U0001f4e6 " + file_size
+    text += "\n\U0001f4cd \u6765\u6e90: E-Hentai"
+
+    is_vip = _is_vip(user_id)
+    if is_vip and magnets:
+        text += "\n\n\U0001f9f2 <b>\u78c1\u529b\u94fe\u63a5 (" + str(len(magnets)) + "\u4e2a):</b>"
+        for i, mag in enumerate(magnets):
+            short_mag = mag[:60] + "..." if len(mag) > 60 else mag
+            text += "\n<code>" + html.escape(short_mag) + "</code>"
+    elif not is_vip:
+        text += "\n\n\U0001f451 <b>VIP\u53ef\u67e5\u770b\u78c1\u529b\u94fe\u63a5</b>"
 
     url_key = _store_url(url)
-    buttons = [[InlineKeyboardButton("🖼️ 查看完整图集", callback_data=f"f_{url_key}")]]
-    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
+    buttons = []
+    if is_vip and magnets:
+        for i, mag in enumerate(magnets[:5]):
+            label = "\U0001f9f2 \u78c1\u529b" + str(i+1) if len(magnets) > 1 else "\U0001f9f2 \u78c1\u529b\u94fe"
+            buttons.append([InlineKeyboardButton(label, url=mag)])
+    if not is_vip:
+        buttons.append([InlineKeyboardButton("\U0001f451 \u5f00\u901aVIP\u67e5\u770b\u78c1\u529b\u94fe", callback_data="vip_upgrade")])
+    buttons.append([InlineKeyboardButton("\U0001f517 \u67e5\u770b\u539f\u7f51\u9875", url=url)])
+    buttons.append([InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")])
+
     keyboard = InlineKeyboardMarkup(buttons)
 
     sent = False
@@ -954,7 +917,7 @@ async def _send_gallery_detail(update, url, gallery_data=None):
                 photo=img_data, caption=text, reply_markup=keyboard, parse_mode="HTML")
             sent = True
         except Exception as e:
-            logger.error(f"Cover send failed: {traceback.format_exc()}")
+            logger.error(f"EH cover send failed: {traceback.format_exc()}")
 
     if not sent and cover:
         try:
@@ -962,24 +925,68 @@ async def _send_gallery_detail(update, url, gallery_data=None):
                 photo=cover, caption=text, reply_markup=keyboard, parse_mode="HTML")
             sent = True
         except Exception as e:
-            logger.error(f"Cover url send failed: {traceback.format_exc()}")
+            logger.error(f"EH cover url send failed: {traceback.format_exc()}")
 
     if not sent:
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+async def _send_gallery_detail(update, url, gallery_data=None):
+    user_id = update.effective_user.id
+    logger.info("Fetching gallery: " + url[:80])
+    if gallery_data is None:
+        try:
+            gallery_data = get_gallery_images(url)
+        except Exception:
+            logger.error("Gallery fetch error: " + traceback.format_exc())
+            await update.effective_message.reply_text("😔 获取图集详情失败，请稍后再试。")
+            return
+    title = gallery_data["title"]
+    cover = gallery_data["cover"]
+    cover_bytes = gallery_data.get("cover_bytes")
+    publish_date = gallery_data.get("publish_date", "")
+    all_images = gallery_data["images"]
+    track_click(url, title)
+    original_count = _parse_count_from_title(title)
+    display_count = original_count if original_count > 0 else len(all_images)
+    clean_title = _clean_title(title)
+    text = "🎀 " + html.escape(clean_title) + "\n📸 " + str(display_count) + "张"
+    if publish_date:
+        text += "\n🕐 " + publish_date
+    url_key = _store_url(url)
+    buttons = [[InlineKeyboardButton("🖼️ 查看完整图集", callback_data="f_" + url_key)]]
+    buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="menu_home")])
+    keyboard = InlineKeyboardMarkup(buttons)
+    sent = False
+    if cover_bytes:
+        img_data, img_ct = cover_bytes
+        try:
+            img_data.seek(0)
+            await update.effective_message.reply_photo(photo=img_data, caption=text, reply_markup=keyboard, parse_mode="HTML")
+            sent = True
+        except Exception:
+            logger.error("Cover send failed: " + traceback.format_exc())
+    if not sent and cover:
+        try:
+            await update.effective_message.reply_photo(photo=cover, caption=text, reply_markup=keyboard, parse_mode="HTML")
+            sent = True
+        except Exception:
+            logger.error("Cover url send failed: " + traceback.format_exc())
+    if not sent:
+        await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+
 
 async def _send_gallery_full(update, url):
     user_id = update.effective_user.id
     try:
         gallery_data = get_gallery_images(url)
-    except Exception as e:
-        logger.error(f"Full gallery error: {traceback.format_exc()}")
+    except Exception:
+        logger.error("Full gallery error: " + traceback.format_exc())
         await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
         return
-
     all_images = gallery_data["images"]
     total_pages = (len(all_images) + 9) // 10
     preview = all_images[:10]
-
     media = []
     downloaded = 0
     for img_url in preview:
@@ -992,20 +999,21 @@ async def _send_gallery_full(update, url):
     if media:
         try:
             await update.effective_message.reply_media_group(media=media)
-        except Exception as e:
-            logger.error(f"Media group failed: {traceback.format_exc()}")
-
+        except Exception:
+            logger.error("Media group failed: " + traceback.format_exc())
     url_key = _store_url(url)
     buttons = []
     if _is_vip(user_id):
         if total_pages > 1:
-            buttons.append([InlineKeyboardButton("➡️ 下一页", callback_data=f"g_{url_key}_1")])
+            buttons.append([InlineKeyboardButton("➡️ 下一页", callback_data="g_" + url_key + "_1")])
     else:
         buttons.append([InlineKeyboardButton("👑 VIP查看完整图集", callback_data="vip_upgrade")])
-    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
+    if _is_vip(user_id):
+        buttons.append([InlineKeyboardButton("📦 原图压缩包", callback_data="zip_" + url_key)])
+    buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
-    await update.effective_message.reply_text(
-        f"📸 第1/{total_pages}页（{downloaded}张）", reply_markup=keyboard)
+    await update.effective_message.reply_text("📸 第1/" + str(total_pages) + "页（" + str(downloaded) + "张）", reply_markup=keyboard)
+
 
 async def _send_gallery_page(update, url, page=0):
     user_id = update.effective_user.id
@@ -1016,7 +1024,6 @@ async def _send_gallery_page(update, url, page=0):
     except Exception:
         await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
         return
-
     all_images = gallery_data["images"]
     total_pages = (len(all_images) + 9) // 10
     start = page * 10
@@ -1025,7 +1032,6 @@ async def _send_gallery_page(update, url, page=0):
     if not page_images:
         await update.effective_message.reply_text("已经是最后一页了～")
         return
-
     media = []
     downloaded = 0
     for img_url in page_images:
@@ -1038,58 +1044,58 @@ async def _send_gallery_page(update, url, page=0):
     if media:
         try:
             await update.effective_message.reply_media_group(media=media)
-        except Exception as e:
-            logger.error(f"Page media failed: {traceback.format_exc()}")
-
+        except Exception:
+            logger.error("Page media failed: " + traceback.format_exc())
     url_key = _store_url(url)
     buttons = []
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"g_{url_key}_{page-1}"))
-    nav.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="noop"))
+        nav.append(InlineKeyboardButton("⬅️ 上一页", callback_data="g_" + url_key + "_" + str(page-1)))
+    nav.append(InlineKeyboardButton("📄 " + str(page+1) + "/" + str(total_pages), callback_data="noop"))
     if page < total_pages - 1:
-        nav.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"g_{url_key}_{page+1}"))
+        nav.append(InlineKeyboardButton("➡️ 下一页", callback_data="g_" + url_key + "_" + str(page+1)))
     buttons.append(nav)
-    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
+    buttons.append([InlineKeyboardButton("📦 原图压缩包", callback_data="zip_" + url_key)])
+    buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
-    await update.effective_message.reply_text(
-        f"📸 第{page+1}/{total_pages}页（{downloaded}张）", reply_markup=keyboard)
+    await update.effective_message.reply_text("📸 第" + str(page+1) + "/" + str(total_pages) + "页（" + str(downloaded) + "张）", reply_markup=keyboard)
+
 
 # ========== Error Handler ==========
 
 async def error_handler(update, context):
-    logger.error(f"Global error: {context.error}", exc_info=True)
+    logger.error("Global error: " + str(context.error), exc_info=True)
     if update and isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text("❌ 出错了，请稍后再试。")
         except Exception:
             pass
 
+
 # ========== Main ==========
 
 async def shutdown(app, signal_str=None):
-    """Graceful shutdown handler."""
     if signal_str:
-        logger.info(f"Received signal {signal_str}, shutting down...")
+        logger.info("Received signal " + signal_str + ", shutting down...")
     else:
         logger.info("Shutting down...")
     try:
         await app.stop()
         await app.shutdown()
-    except Exception as e:
-        logger.error(f"Shutdown error: {e}")
+    except Exception:
+        pass
     logger.info("Bot stopped.")
+
 
 def main():
     errors = config.validate()
     if errors:
         for e in errors:
-            logger.error(f"Config error: {e}")
+            logger.error("Config error: " + str(e))
         sys.exit(1)
-
     _load_vip()
     _load_users()
-    logger.info(f"Loaded {len(VIP_USERS)} VIP users, {len(ALL_USERS)} total users")
+    logger.info("Loaded " + str(len(VIP_USERS)) + " VIP users, " + str(len(ALL_USERS)) + " total users")
 
     async def _setup_commands(app):
         from telegram import BotCommand
@@ -1108,21 +1114,16 @@ def main():
     app.add_handler(CommandHandler("random", cmd_random))
     app.add_handler(CommandHandler("my", cmd_my))
     app.add_handler(CommandHandler("setvip", cmd_setvip))
-    app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CommandHandler("admin", cmd_admin))
-    app.add_handler(CommandHandler("setvip", cmd_setvip))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
 
-    # Periodic cleanup + VIP expiry reminder
     async def _periodic_cleanup(application):
         last_reminder_day = 0
         while True:
-            await asyncio.sleep(600)  # every 10 minutes
+            await asyncio.sleep(600)
             _cleanup_all()
             gc.collect()
-            # Check VIP expiry reminders once per day
             today = time.strftime("%Y%m%d")
             if today != last_reminder_day:
                 last_reminder_day = today
@@ -1134,48 +1135,51 @@ def main():
                         try:
                             await application.bot.send_message(
                                 chat_id=uid,
-                                text=f"⏰ <b>VIP即将到期提醒</b>\n\n你的VIP会员将于 <b>{exp_str}</b> 到期，请及时续费哦～\n\n点击下方按钮续费：",
+                                text="⏰ <b>VIP即将到期提醒</b>\n\n你的VIP会员将于 <b>" + exp_str + "</b> 到期，请及时续费哦～",
                                 parse_mode="HTML",
                                 reply_markup=InlineKeyboardMarkup([[
                                     InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")
                                 ]])
                             )
-                        except Exception as e:
-                            logger.warning(f"Failed to send reminder to {uid}: {e}")
+                        except Exception:
+                            pass
 
     if config.WEBHOOK_URL:
-        logger.info(f"Starting in webhook mode: {config.WEBHOOK_URL}")
-
+        logger.info("Starting in webhook mode: " + config.WEBHOOK_URL)
         async def _start_webhook():
             await app.initialize()
             await app.start()
             asyncio.create_task(_periodic_cleanup(app))
-            await app.bot.set_webhook(url=f"{config.WEBHOOK_URL}/webhook")
-            logger.info("Webhook set. Waiting...")
+            await app.bot.set_webhook(url=config.WEBHOOK_URL + "/webhook")
+            logger.info("Webhook set.")
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 await shutdown(app)
-
         try:
             asyncio.run(_start_webhook())
         except KeyboardInterrupt:
             asyncio.run(shutdown(app, "SIGINT"))
     else:
         logger.info("Starting in polling mode")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.create_task(_periodic_cleanup(app))
+        async def _run_polling():
+            cleanup_task = asyncio.create_task(_periodic_cleanup(app))
+            try:
+                await app.run_polling(allowed_updates=["message", "callback_query"], close_loop=False, stop_signals=[])
+            except asyncio.CancelledError:
+                pass
+            finally:
+                cleanup_task.cancel()
+                try:
+                    await cleanup_task
+                except asyncio.CancelledError:
+                    pass
+                await shutdown(app)
         try:
-            app.run_polling(
-                allowed_updates=["message", "callback_query"],
-                close_loop=False,
-                stop_signals=[],
-            )
+            asyncio.run(_run_polling())
         except KeyboardInterrupt:
-            logger.info("Received KeyboardInterrupt")
-        finally:
-            loop.run_until_complete(shutdown(app))
+            pass
+
 
 if __name__ == "__main__":
     main()
