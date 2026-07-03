@@ -44,7 +44,7 @@ class Config:
 
     # Admin IDs (comma-separated)
     ADMIN_IDS: set[int] = {
-        int(x.strip()) for x in os.getenv("ADMIN_IDS", "5405770555").split(",") if x.strip()
+        int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()
     }
 
     @classmethod
@@ -55,7 +55,7 @@ class Config:
         elif "your-" in cls.BOT_TOKEN.lower() or "placeholder" in cls.BOT_TOKEN.lower():
             errors.append("BOT_TOKEN looks like a placeholder")
         if not cls.ADMIN_IDS:
-            errors.append("ADMIN_IDS is empty â€” bot will have no admin access")
+            errors.append("ADMIN_IDS is empty â€?bot will have no admin access")
         return errors
 
 config = Config()
