@@ -1059,7 +1059,6 @@ async def _send_xchina_detail(update, url):
     buttons = []
     if images:
         buttons.append([InlineKeyboardButton("🖼 查看完整图集", callback_data="f_" + url_key)])
-    buttons.append([InlineKeyboardButton("🔗 查看原网页", url=url)])
     buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
 
     keyboard = InlineKeyboardMarkup(buttons)
@@ -1137,7 +1136,7 @@ async def _send_gallery_full(update, url):
         gid = _re.search(r"/id-([a-f0-9]+)", url)
         if gid:
             gallery_id = gid.group(1)
-            max_imgs = config.MAX_IMAGES_PER_POST
+            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
             all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
         else:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
@@ -1191,7 +1190,7 @@ async def _send_gallery_page(update, url, page=0):
         gid = _re.search(r"/id-([a-f0-9]+)", url)
         if gid:
             gallery_id = gid.group(1)
-            max_imgs = config.MAX_IMAGES_PER_POST
+            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
             all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
         else:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
