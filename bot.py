@@ -1,4 +1,4 @@
-"""Gallery Search Bot - Telegram Bot"""
+﻿"""Gallery Search Bot - Telegram Bot"""
 import asyncio
 import logging
 import sys
@@ -255,7 +255,7 @@ VIP_TEXT = """<b>👑 VIP 会员说明</b>
 • 无限次搜索
 • 查看完整大图集
 • 翻页浏览所有图片
-
+• 原图压缩包下载
 • 优先体验新功能
 
 🚧 功能开发中，敬请期待～"""
@@ -550,9 +550,20 @@ async def handle_text(update, context):
         return
     await _do_search(update, keyword)
 
-async def _do_search(update, context, user_id, keyword):
+async def _do_search(update, keyword):
     """Search both 4KHD and E-Hentai, merge results by date."""
+    user_id = update.effective_user.id
     msg = update.message
+    # Rate limit for non-VIP users
+    if not _is_vip(user_id):
+        if not _check_rate_limit(user_id):
+            await msg.reply_text(
+                "⚠️ 搜索太频繁啦～请稍后再试（每分钟最多" + str(RATE_LIMIT_MAX) + "次）\n\n👑 VIP用户不限流，开通VIP享受无限搜索！",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("👑 开通VIP", callback_data="menu_vip")
+                ]])
+            )
+            return
     loading = await msg.reply_text("\U0001f50d \u6b63\u5728\u641c\u7d22 4KHD + E\u7ad9\uff0c\u8bf7\u7a0d\u5019...")
 
     # Search 4KHD
@@ -566,13 +577,6 @@ async def _do_search(update, context, user_id, keyword):
     try:
         eh_results = search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS)
         # Get dates for EH results
-        for r in eh_results:
-            if not r.get("date"):
-                try:
-                    detail = get_ehentai_gallery(r["url"])
-                    r["date"] = detail.get("date", "")
-                except Exception:
-                    pass
     except Exception as e:
         logger.error(f"EH search error: {e}")
         eh_results = []
@@ -802,6 +806,104 @@ async def handle_callback(update, context):
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("\U0001f519 \u8fd4\u56de\u7ba1\u7406\u9762\u677f", callback_data="admin_back")
                 ]]))
+
+        elif data == "admin_back":
+            if user_id not in ADMIN_IDS:
+                return
+            total_vip = len(VIP_USERS)
+            permanent = sum(1 for v in VIP_USERS.values() if v is None)
+            timed = total_vip - permanent
+            cards = _load_cards()
+            total_cards = len(cards)
+            used_cards = sum(1 for c in cards.values() if c.get("used"))
+            from scraper import gallery_clicks, keyword_popularity
+            regular_users = [uid for uid in ALL_USERS if uid not in VIP_USERS]
+            vip_users_list = [uid for uid in VIP_USERS if uid not in ADMIN_IDS]
+            bl = []
+            bl.append("\U0001f4ca <b>\u7ba1\u7406\u5458\u9762\u677f</b>")
+            bl.append("")
+            bl.append("\U0001f465 \u603b\u7528\u6237: " + str(len(ALL_USERS)))
+            bl.append("   \u666e\u901a\u7528\u6237: " + str(len(regular_users)))
+            bl.append("   VIP\u7528\u6237: " + str(total_vip) + " (" + str(permanent) + "\u6c38\u4e45 + " + str(timed) + "\u9650\u65f6)")
+            bl.append("")
+            bl.append("\U0001f3ab \u5361\u5bc6: \u5df2\u7528" + str(used_cards) + "/\u603b\u8ba1" + str(total_cards))
+            bl.append("\U0001f50d \u641c\u7d22\u70ed\u8bcd: " + str(len(keyword_popularity)))
+            bl.append("\U0001f4c8 \u70b9\u51fb\u8bb0\u5f55: " + str(len(gallery_clicks)))
+            if vip_users_list:
+                bl.append("")
+                bl.append("<b>\U0001f451 VIP\u7528\u6237:</b>")
+                for uid in vip_users_list[:5]:
+                    exp = VIP_USERS.get(uid)
+                    exp_str = "\u6c38\u4e45" if exp is None else datetime.fromtimestamp(exp).strftime("%m-%d")
+                    bl.append("  \u2022 " + str(uid) + " (" + exp_str + ")")
+                if len(vip_users_list) > 5:
+                    bl.append("  ... +" + str(len(vip_users_list)-5))
+            if regular_users:
+                bl.append("")
+                bl.append("<b>\U0001f465 \u666e\u901a\u7528\u6237:</b>")
+                for uid in regular_users[:5]:
+                    bl.append("  \u2022 " + str(uid))
+                if len(regular_users) > 5:
+                    bl.append("  ... +" + str(len(regular_users)-5))
+            stats = "\n".join(bl)
+            await query.edit_message_text(stats, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("\u2705 \u8bbe\u7f6eVIP\u7528\u6237", callback_data="admin_setvip_prompt")],
+                    [InlineKeyboardButton("\U0001f3ab \u751f\u6210\u5361\u5bc6", callback_data="admin_gencode")],
+                    [InlineKeyboardButton("\U0001f50d \u67e5\u770b\u5168\u90e8\u7528\u6237", callback_data="admin_listusers")],
+                ]))
+
+        elif data == "admin_setvip_prompt":
+            if user_id not in ADMIN_IDS:
+                await query.answer("\u274c \u65e0\u6743\u9650", show_alert=True)
+                return
+            admin_setvip_state[user_id] = True
+            await query.edit_message_text(
+                "\u2705 \u8bf7\u8f93\u5165\u8981\u8bbe\u7f6e\u4e3aVIP\u7684\u7528\u6237ID\uff1a\n\n\u4f8b\u5982\u76f4\u63a5\u53d1\u9001: 123456789",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("\u274c \u53d6\u6d88", callback_data="admin_back")
+                ]])
+            )
+
+        elif data == "admin_listusers":
+            if user_id not in ADMIN_IDS:
+                return
+            vip_data = [(uid, VIP_USERS[uid]) for uid in VIP_USERS if uid not in ADMIN_IDS]
+            regular = [uid for uid in ALL_USERS if uid not in VIP_USERS]
+            ll = []
+            ll.append("\U0001f4cb <b>\u5168\u90e8\u7528\u6237\u5217\u8868</b>")
+            ll.append("")
+            ll.append("\U0001f451 <b>VIP\u7528\u6237 (" + str(len(vip_data)) + "):</b>")
+            if vip_data:
+                for uid, exp in vip_data:
+                    if exp is None:
+                        exp_str = "\u6c38\u4e45"
+                    else:
+                        rem = max(0, int((exp - time.time()) / 86400))
+                        exp_str = "\u5269" + str(rem) + "\u5929"
+                    ll.append("  \u2022 <code>" + str(uid) + "</code> - " + exp_str)
+            else:
+                ll.append("  \u6682\u65e0")
+            ll.append("")
+            ll.append("\U0001f465 <b>\u666e\u901a\u7528\u6237 (" + str(len(regular)) + "):</b>")
+            if regular:
+                for uid in regular:
+                    ll.append("  \u2022 <code>" + str(uid) + "</code>")
+            else:
+                ll.append("  \u6682\u65e0")
+            text = "\n".join(ll)
+            if len(text) > 4000:
+                text = text[:4000] + "\n\n... \u5217\u8868\u8fc7\u957f\u5df2\u622a\u65ad"
+            await query.edit_message_text(text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("\U0001f519 \u8fd4\u56de\u7ba1\u7406\u9762\u677f", callback_data="admin_back")
+                ]]))
+
+        elif data.startswith("zip_"):
+            if not _is_vip(user_id):
+                await query.answer("\u2699\ufe0f \u8be5\u529f\u80fd\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u656c\u8bf7\u671f\u5f85", show_alert=True)
+                return
+            await query.answer("\u2699\ufe0f \u529f\u80fd\u5f00\u53d1\u4e2d\uff0c\u656c\u8bf7\u671f\u5f85", show_alert=True)
 
         
 
@@ -1120,6 +1222,8 @@ def main():
     app.add_handler(CommandHandler("random", cmd_random))
     app.add_handler(CommandHandler("my", cmd_my))
     app.add_handler(CommandHandler("setvip", cmd_setvip))
+    app.add_handler(CommandHandler("admin", cmd_admin))
+    app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
