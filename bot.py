@@ -27,7 +27,7 @@ from telegram.ext import (
 from config import config
 from scraper import (
     search_galleries, get_gallery_images, get_random_gallery,
-    download_image, track_click, extract_download_link,
+    download_image, track_click,
 )
 
 # ---- Logging ----
@@ -74,7 +74,6 @@ MENU_KEYBOARD = ReplyKeyboardMarkup([
     [KeyboardButton("🔍 搜索"), KeyboardButton("🎲 推荐"), KeyboardButton("👑 VIP"), KeyboardButton("👤 我的")],
 ], resize_keyboard=True)
 
-
 # ========== State Helpers ==========
 
 def _cleanup_url_store():
@@ -83,14 +82,12 @@ def _cleanup_url_store():
     now = time.time()
     url_store = {k: v for k, v in url_store.items() if now - v.get("ts", 0) < URL_TTL}
 
-
 def _cleanup_user_state(user_id):
     """Remove expired user search state."""
     if user_id in user_search_state:
         ts = user_search_state[user_id].get("ts", 0)
         if time.time() - ts > USER_STATE_TTL:
             del user_search_state[user_id]
-
 
 def _cleanup_all():
     """Periodic cleanup of all state stores."""
@@ -100,7 +97,6 @@ def _cleanup_all():
         del user_search_state[uid]
     _cleanup_url_store()
 
-
 def _save_vip():
     """Save VIP user list to file."""
     try:
@@ -108,7 +104,6 @@ def _save_vip():
             json.dump(VIP_USERS, f)
     except Exception as e:
         logger.error(f"Failed to save VIP: {e}")
-
 
 def _load_vip():
     """Load VIP user list from file."""
@@ -125,7 +120,6 @@ def _load_vip():
         logger.error(f"Failed to load VIP: {e}")
         VIP_USERS = {}
 
-
 def _load_users():
     global ALL_USERS
     try:
@@ -135,14 +129,12 @@ def _load_users():
     except Exception:
         ALL_USERS = set()
 
-
 def _save_users():
     try:
         with open(USERS_FILE, "w", encoding="utf-8") as f:
             json.dump(list(ALL_USERS), f)
     except Exception:
         pass
-
 
 def _load_cards() -> dict:
     try:
@@ -153,14 +145,12 @@ def _load_cards() -> dict:
         pass
     return {}
 
-
 def _save_cards(cards: dict):
     try:
         with open(CARD_FILE, "w", encoding="utf-8") as f:
             json.dump(cards, f, ensure_ascii=False)
     except Exception as e:
         logger.error(f"Failed to save cards: {e}")
-
 
 def _store_url(url):
     """Store URL with timestamp and return a short key."""
@@ -172,7 +162,6 @@ def _store_url(url):
         _cleanup_url_store()
     return key
 
-
 def _get_url(key):
     entry = url_store.get(key)
     if not entry:
@@ -182,7 +171,6 @@ def _get_url(key):
         del url_store[key]
         return ""
     return entry["url"]
-
 
 def _check_rate_limit(user_id: int) -> bool:
     """Check if user has exceeded the rate limit. Returns True if allowed."""
@@ -198,7 +186,6 @@ def _check_rate_limit(user_id: int) -> bool:
         _user_search_times[user_id].append(now)
         return True
 
-
 def _parse_count_from_title(title):
     m = re.search(r"(\d+)\s*photos?", title, re.IGNORECASE)
     if m:
@@ -208,10 +195,8 @@ def _parse_count_from_title(title):
         return int(m.group(1))
     return 0
 
-
 def _clean_title(title):
     return re.sub(r"\s*\[[^\]]*\].*$", "", title).strip()
-
 
 def _is_vip(user_id):
     if user_id not in VIP_USERS:
@@ -225,7 +210,6 @@ def _is_vip(user_id):
         return False
     return True
 
-
 async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"):
     try:
         if isinstance(msg_or_query, Message):
@@ -238,7 +222,6 @@ async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"
         if "not modified" not in err_str.lower():
             logger.warning(f"_edit_message failed: {err_str}")
 
-
 # ========== Start Menu ==========
 
 START_TEXT = """<b>✨ 美少女图集搜索姬 ✨</b>
@@ -248,7 +231,6 @@ START_TEXT = """<b>✨ 美少女图集搜索姬 ✨</b>
 🎀 <b>我能做什么？</b>
 • 🔍 海量 Cosplay、写真、自拍图集随意搜
 • 🎲 不知道看什么？试试随机推荐
-• 👑 VIP 还能翻页浏览 + 下载原图压缩包
 
 💕 资源每日更新，再也不怕片荒啦～
 
@@ -266,11 +248,10 @@ VIP_TEXT = """<b>👑 VIP 会员说明</b>
 • 无限次搜索
 • 查看完整大图集
 • 翻页浏览所有图片
-• 原图压缩包下载
+
 • 优先体验新功能
 
 🚧 功能开发中，敬请期待～"""
-
 
 async def cmd_start(update, context):
     user_id = update.effective_user.id
@@ -281,7 +262,6 @@ async def cmd_start(update, context):
         _save_users()
     await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
-
 
 async def cmd_setvip(update, context):
     user_id = update.effective_user.id
@@ -298,7 +278,6 @@ async def cmd_setvip(update, context):
         logger.info(f"VIP added: {target}")
     except ValueError:
         await update.message.reply_text("用户ID必须是数字")
-
 
 async def cmd_admin(update, context):
     user_id = update.effective_user.id
@@ -368,8 +347,6 @@ async def cmd_admin(update, context):
     ])
     await update.message.reply_text(stats, parse_mode="HTML", reply_markup=keyboard)
 
-
-
 async def cmd_stats(update, context):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -390,7 +367,6 @@ async def cmd_stats(update, context):
         f"📈 点击记录: {len(gallery_clicks)}"
     )
     await update.message.reply_text(stats, parse_mode="HTML")
-
 
 async def cmd_my(update, context):
     user_id = update.effective_user.id
@@ -419,7 +395,6 @@ async def cmd_my(update, context):
                 [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")],
             ]))
 
-
 async def cmd_help(update, context):
     await update.message.reply_text(
         "<b>📖 使用帮助</b>\n\n"
@@ -429,7 +404,6 @@ async def cmd_help(update, context):
         "/start - 回到主菜单",
         parse_mode="HTML"
     )
-
 
 async def cmd_search(update, context):
     user_id = update.effective_user.id
@@ -446,7 +420,6 @@ async def cmd_search(update, context):
     keyword = " ".join(context.args)
     await _do_search(update, keyword)
 
-
 async def cmd_random(update, context):
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
@@ -462,7 +435,6 @@ async def cmd_random(update, context):
         return
     await msg.delete()
     await _send_gallery_detail(update, gallery["url"])
-
 
 # ========== Handle Bottom Keyboard Buttons ==========
 
@@ -487,7 +459,6 @@ async def handle_text(update, context):
         except ValueError:
             await update.message.reply_text("\u274c \u8bf7\u8f93\u5165\u6709\u6548\u7684\u7528\u6237ID\uff08\u6570\u5b57\uff09")
         return
-
 
     if text == "🔍 搜索":
         user_waiting_search.add(user_id)
@@ -572,7 +543,6 @@ async def handle_text(update, context):
         return
     await _do_search(update, keyword)
 
-
 async def _do_search(update, keyword):
     user_id = update.effective_user.id
 
@@ -607,7 +577,6 @@ async def _do_search(update, keyword):
     }
     await _show_results_page(msg, user_id)
 
-
 # ========== Menu Callbacks ==========
 
 async def _handle_menu_search(update, context):
@@ -621,7 +590,6 @@ async def _handle_menu_search(update, context):
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
         ]]))
-
 
 async def _handle_menu_random(update, context):
     query = update.callback_query
@@ -637,7 +605,6 @@ async def _handle_menu_random(update, context):
         await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
         return
     await _send_gallery_detail(update, gallery["url"])
-
 
 async def _handle_menu_vip(update, context):
     query = update.callback_query
@@ -657,7 +624,6 @@ async def _handle_menu_vip(update, context):
             [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
         ]))
 
-
 async def _handle_menu_home(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
@@ -671,7 +637,6 @@ async def _handle_menu_home(update, context):
         except Exception:
             pass
         await query.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
-
 
 # ========== Main Callback Handler ==========
 
@@ -747,31 +712,6 @@ async def handle_callback(update, context):
                 await loading_msg.delete()
             except Exception:
                 pass
-        elif data.startswith("zip_"):
-            url = _get_url(data[4:])
-            if not url:
-                await query.edit_message_text("\u274c \u94fe\u63a5\u5df2\u8fc7\u671f\u3002")
-                return
-            if not _is_vip(user_id):
-                await query.answer("\U0001f451 \u8bf7\u5148\u5f00\u901aVIP\u4f1a\u5458", show_alert=True)
-                return
-            loading_msg = await query.message.reply_text("\u23f3 \u6b63\u5728\u83b7\u53d6\u4e0b\u8f7d\u94fe\u63a5...")
-            short_link = extract_download_link(url)
-            try:
-                await loading_msg.delete()
-            except Exception:
-                pass
-            if short_link:
-                text = '\U0001f4e6 <b>\u539f\u56fe\u538b\u7f29\u5305</b>\n\n\U0001f517 <a href="' + short_link + '">\u70b9\u51fb\u4e0b\u8f7d\u538b\u7f29\u5305</a>\n\n\u26a1 \u70b9\u51fb\u4e0a\u65b9\u94fe\u63a5\uff0c\u6d4f\u89c8\u5668\u4f1a\u81ea\u52a8\u8df3\u8f6c\u5230 TeraBox\n\n\U0001f513 \u89e3\u538b\u5bc6\u7801\uff1a<code>4KHD</code>'
-            else:
-                text = '\U0001f4e6 <b>\u539f\u56fe\u538b\u7f29\u5305</b>\n\n\u26a0\ufe0f \u672a\u627e\u5230\u4e0b\u8f7d\u94fe\u63a5\uff0c\u8bf7\u4ece <a href="' + url + '">\u539f\u7f51\u9875</a> \u624b\u52a8\u63d0\u53d6'
-            await query.edit_message_text(
-                text, parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")
-                ]]))
-
-
         elif data == "vip_upgrade":
             user_id = update.effective_user.id
             if _is_vip(user_id):
@@ -921,14 +861,12 @@ async def handle_callback(update, context):
                     InlineKeyboardButton("\U0001f519 \u8fd4\u56de\u7ba1\u7406\u9762\u677f", callback_data="admin_back")
                 ]]))
 
-
     except Exception as e:
         logger.error(f"Callback error: {traceback.format_exc()}")
         try:
             await query.edit_message_text("❌ 操作失败，请重试。")
         except Exception:
             pass
-
 
 # ========== Display ==========
 
@@ -974,7 +912,6 @@ async def _show_results_page(msg_or_query, user_id):
         InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
     ])
     await _edit_message(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
-
 
 async def _send_gallery_detail(update, url, gallery_data=None):
     user_id = update.effective_user.id
@@ -1030,7 +967,6 @@ async def _send_gallery_detail(update, url, gallery_data=None):
     if not sent:
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
-
 async def _send_gallery_full(update, url):
     user_id = update.effective_user.id
     try:
@@ -1066,13 +1002,10 @@ async def _send_gallery_full(update, url):
             buttons.append([InlineKeyboardButton("➡️ 下一页", callback_data=f"g_{url_key}_1")])
     else:
         buttons.append([InlineKeyboardButton("👑 VIP查看完整图集", callback_data="vip_upgrade")])
-    if _is_vip(user_id):
-        buttons.append([InlineKeyboardButton("📦 原图压缩包", callback_data=f"zip_{url_key}")])
     buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
     await update.effective_message.reply_text(
         f"📸 第1/{total_pages}页（{downloaded}张）", reply_markup=keyboard)
-
 
 async def _send_gallery_page(update, url, page=0):
     user_id = update.effective_user.id
@@ -1117,12 +1050,10 @@ async def _send_gallery_page(update, url, page=0):
     if page < total_pages - 1:
         nav.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"g_{url_key}_{page+1}"))
     buttons.append(nav)
-    buttons.append([InlineKeyboardButton("📦 原图压缩包", callback_data=f"zip_{url_key}")])
     buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
     await update.effective_message.reply_text(
         f"📸 第{page+1}/{total_pages}页（{downloaded}张）", reply_markup=keyboard)
-
 
 # ========== Error Handler ==========
 
@@ -1133,7 +1064,6 @@ async def error_handler(update, context):
             await update.effective_message.reply_text("❌ 出错了，请稍后再试。")
         except Exception:
             pass
-
 
 # ========== Main ==========
 
@@ -1149,7 +1079,6 @@ async def shutdown(app, signal_str=None):
     except Exception as e:
         logger.error(f"Shutdown error: {e}")
     logger.info("Bot stopped.")
-
 
 def main():
     errors = config.validate()
@@ -1247,7 +1176,6 @@ def main():
             logger.info("Received KeyboardInterrupt")
         finally:
             loop.run_until_complete(shutdown(app))
-
 
 if __name__ == "__main__":
     main()
