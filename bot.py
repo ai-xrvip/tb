@@ -28,7 +28,6 @@ from config import config
 from scraper import (
     search_galleries, get_gallery_images, get_random_gallery,
     download_image, track_click,
-    search_ehentai, get_ehentai_gallery,
 )
 
 # ---- Logging ----
@@ -615,7 +614,7 @@ async def handle_text(update, context):
 async def _do_search(update, keyword):
     """Search both 4KHD and E-Hentai, merge results by date."""
     msg = update.message
-    loading = await msg.reply_text("🔍 正在搜索 4KHD + E站，请稍候...")
+    loading = await msg.reply_text("🔍 正在搜索中，请稍候...")
 
     # Rate limit check
     user_id = update.effective_user.id
@@ -629,36 +628,11 @@ async def _do_search(update, keyword):
         )
         return
 
-    # Search 4KHD
     try:
-        hd_results = await search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS)
+        merged = await search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS)
     except Exception as e:
         logger.error(f"4KHD search error: {traceback.format_exc()}")
-        hd_results = []
-
-    # Search E-Hentai (with small delay to avoid rate limits)
-    try:
-        await asyncio.sleep(0.3)
-        eh_results = await search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS)
-    except Exception as e:
-        logger.error(f"EH search error: {traceback.format_exc()}")
-        eh_results = []
-
-    # Merge: interleave results (alternating for variety)
-    merged = []
-    i, j = 0, 0
-    while i < len(hd_results) or j < len(eh_results):
-        if i < len(hd_results):
-            merged.append(hd_results[i])
-            i += 1
-        if j < len(eh_results):
-            merged.append(eh_results[j])
-            j += 1
-
-    try:
-        await loading.delete()
-    except Exception:
-        pass
+        merged = []
 
     if not merged:
         await msg.reply_text(
@@ -785,18 +759,6 @@ async def handle_callback(update, context):
                 await loading_msg.delete()
             except Exception:
                 pass
-        elif data.startswith("e_"):
-            url = _get_url(data[2:])
-            if not url:
-                await query.edit_message_text("❌ 链接已过期，请重新搜索。")
-                return
-            loading_msg = await query.message.reply_text("⏳ 正在获取E站图集详情...")
-            await _send_eh_detail(update, url)
-            try:
-                await loading_msg.delete()
-            except Exception:
-                pass
-
         elif data.startswith("f_"):
             url = _get_url(data[2:])
             if not url:
@@ -1004,11 +966,11 @@ async def _show_results_page(msg_or_query, user_id):
     for i, r in enumerate(page_results):
         idx = start + i + 1
         clean_title = _clean_title(r["title"])
-        source_badge = "🌐" if r.get("source") == "ehentai" else "📷"
+        source_badge = "\U0001f4f7"
         text += f"{idx}. {source_badge} {html.escape(clean_title)}\n"
         btn_label = clean_title[:20] + ".." if len(clean_title) > 22 else clean_title[:22]
         url_key = await _store_url(r["url"])
-        prefix = "e_" if r.get("source") == "ehentai" else "d_"
+        prefix = "d_"
         buttons.append([InlineKeyboardButton(f"{source_badge} {idx}. {btn_label}", callback_data=prefix + url_key)])
 
     # Pagination buttons — limited by accessible pages, not full_pages
@@ -1029,78 +991,6 @@ async def _show_results_page(msg_or_query, user_id):
     await _edit_message(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
 
 
-async def _send_eh_detail(update, url):
-    """Display E-Hentai gallery detail with magnet links for VIP."""
-    user_id = update.effective_user.id
-    try:
-        detail = await get_ehentai_gallery(url)
-    except Exception as e:
-        logger.error(f"EH detail error: {traceback.format_exc()}")
-        await update.effective_message.reply_text("❌ 获取E站图集失败，请稍后再试。")
-        return
-
-    title = detail.get("title", "Unknown")
-    cover = detail.get("cover")
-    cover_bytes = detail.get("cover_bytes")
-    date_str = detail.get("date", "")
-    file_size = detail.get("file_size", "")
-    pages = detail.get("pages", "")
-    magnets = detail.get("magnets", [])
-
-    clean_title = _clean_title(title)
-
-    text = f"🌐 <b>{html.escape(clean_title)}</b>"
-    if date_str:
-        text += f"\n🕐 {date_str}"
-    if pages:
-        text += f"\n📸 {pages}张"
-    if file_size:
-        text += f"\n📦 {file_size}"
-    text += "\n📌 来源: E-Hentai"
-
-    is_vip = _is_vip(user_id)
-    if is_vip and magnets:
-        text += f"\n\n🧲 <b>磁力链接 ({len(magnets)}个):</b>"
-        for i, mag in enumerate(magnets):
-            short_mag = mag[:60] + "..." if len(mag) > 60 else mag
-            text += f"\n<code>{html.escape(short_mag)}</code>"
-    elif not is_vip:
-        text += "\n\n👑 <b>VIP可查看磁力链接</b>"
-
-    url_key = await _store_url(url)
-    buttons = []
-    if is_vip and magnets:
-        for i, mag in enumerate(magnets[:5]):
-            label = f"🧲 磁力{i+1}" if len(magnets) > 1 else "🧲 磁力链"
-            buttons.append([InlineKeyboardButton(label, url=mag)])
-    if not is_vip:
-        buttons.append([InlineKeyboardButton("👑 开通VIP查看磁力链", callback_data="vip_upgrade")])
-    buttons.append([InlineKeyboardButton("🔗 查看原网页", url=url)])
-    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
-
-    keyboard = InlineKeyboardMarkup(buttons)
-
-    sent = False
-    if cover_bytes:
-        img_data, img_ct = cover_bytes
-        try:
-            img_data.seek(0)
-            await update.effective_message.reply_photo(
-                photo=img_data, caption=text, reply_markup=keyboard, parse_mode="HTML")
-            sent = True
-        except Exception as e:
-            logger.error(f"EH cover send failed: {traceback.format_exc()}")
-
-    if not sent and cover:
-        try:
-            await update.effective_message.reply_photo(
-                photo=cover, caption=text, reply_markup=keyboard, parse_mode="HTML")
-            sent = True
-        except Exception as e:
-            logger.error(f"EH cover url send failed: {traceback.format_exc()}")
-
-    if not sent:
-        await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 async def _send_gallery_detail(update, url, gallery_data=None):
