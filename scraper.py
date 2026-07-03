@@ -314,7 +314,7 @@ async def get_gallery_images(post_url: str, max_pages: int = None, max_images: i
     if max_images is None:
         max_images = config.MAX_IMAGES_PER_POST
 
-    cache_key = f"gallery:{post_url}"
+    cache_key = f"gallery:{post_url}:p{max_pages}:i{max_images}"
     cached = await _cache_get(cache_key)
     if cached is not None:
         return cached

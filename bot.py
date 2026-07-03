@@ -1144,7 +1144,7 @@ async def _send_gallery_full(update, url):
     else:
         try:
             max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
-            gallery_data = await get_gallery_images(url, max_images=max_imgs)
+            gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
         except Exception:
             logger.error("Full gallery error: " + traceback.format_exc())
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
@@ -1199,7 +1199,7 @@ async def _send_gallery_page(update, url, page=0):
     else:
         try:
             max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
-            gallery_data = await get_gallery_images(url, max_images=max_imgs)
+            gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
         except Exception:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
             return
