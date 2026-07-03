@@ -56,12 +56,14 @@ RATE_LIMIT_MAX = config.MAX_SEARCHES_PER_MINUTE
 user_search_state: dict = {}       # {user_id: {"page": int, "keyword": str, "results": list, "ts": float}}
 user_waiting_search: set = set()   # {user_id}
 url_store: dict = {}
-admin_setvip_state: dict = {}  # admin setting VIP for a user               # {key: {"url": str, "ts": float}}
+admin_setvip_state: dict = {}               # {key: {"url": str, "ts": float}}
 url_counter: int = 0
 VIP_USERS: dict = {}               # {user_id: expiry_timestamp or None for permanent}
 VIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vip_users.json")
 CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards.json")
 user_waiting_card: set = set()     # {user_id}
+ALL_USERS: set = set()              # all users who ever used the bot
+USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
 # Per-user rate limiting: {user_id: [timestamp, ...]}
 _user_search_times: dict = defaultdict(list)
 _user_search_lock = Lock()
@@ -122,6 +124,24 @@ def _load_vip():
     except Exception as e:
         logger.error(f"Failed to load VIP: {e}")
         VIP_USERS = {}
+
+
+def _load_users():
+    global ALL_USERS
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, "r", encoding="utf-8") as f:
+                ALL_USERS = set(json.load(f))
+    except Exception:
+        ALL_USERS = set()
+
+
+def _save_users():
+    try:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(ALL_USERS), f)
+    except Exception:
+        pass
 
 
 def _load_cards() -> dict:
@@ -256,6 +276,9 @@ async def cmd_start(update, context):
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
     user_waiting_card.discard(user_id)
+    if user_id not in ALL_USERS:
+        ALL_USERS.add(user_id)
+        _save_users()
     await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
 
@@ -278,7 +301,45 @@ async def cmd_setvip(update, context):
 
 
 async def cmd_admin(update, context):
-    """Admin panel with stats, user lists, and management"""
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    args = context.args
+    if args and args[0] == "setvip" and len(args) > 1:
+        try:
+            target = int(args[1])
+            VIP_USERS[target] = None
+            _save_vip()
+            await update.message.reply_text(f"✅ 已将用户 {target} 设为VIP")
+        except ValueError:
+            await update.message.reply_text("用户ID必须是数字")
+        return
+    # Show admin panel
+    total_vip = len(VIP_USERS)
+    permanent = sum(1 for v in VIP_USERS.values() if v is None)
+    timed = total_vip - permanent
+    cards = _load_cards()
+    total_cards = len(cards)
+    used_cards = sum(1 for c in cards.values() if c.get("used"))
+    from scraper import gallery_clicks, keyword_popularity
+    stats = (
+        "📊 <b>管理员面板</b>\n\n"
+        f"👥 用户: {len(ALL_USERS)} (普通 {len(ALL_USERS - set(VIP_USERS.keys()))})\n"
+        f"👑 VIP: {total_vip} ({permanent}永久 + {timed}限时)\n"
+        f"🔑 卡密: 已用{used_cards}/总计{total_cards}\n"
+        f"🔍 搜索热词: {len(keyword_popularity)}\n"
+        f"📂 点击记录: {len(gallery_clicks)}"
+    )
+    await update.message.reply_text(
+        stats, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ 设置VIP用户", switch_inline_query_current_chat=""),
+            InlineKeyboardButton("🔑 生成卡密", callback_data="admin_gencode")
+        ]])
+    )
+
+
+async def cmd_admin(update, context):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         return
@@ -292,7 +353,6 @@ async def cmd_admin(update, context):
         except ValueError:
             await update.message.reply_text("\u7528\u6237ID\u5fc5\u987b\u662f\u6570\u5b57")
         return
-    # Show admin panel
     total_vip = len(VIP_USERS)
     permanent = sum(1 for v in VIP_USERS.values() if v is None)
     timed = total_vip - permanent
@@ -300,10 +360,8 @@ async def cmd_admin(update, context):
     total_cards = len(cards)
     used_cards = sum(1 for c in cards.values() if c.get("used"))
     from scraper import gallery_clicks, keyword_popularity
-
     regular_users = [uid for uid in ALL_USERS if uid not in VIP_USERS]
     vip_users_list = [uid for uid in VIP_USERS if uid not in ADMIN_IDS]
-
     lines = []
     lines.append("\U0001f4ca <b>\u7ba1\u7406\u5458\u9762\u677f</b>")
     lines.append("")
@@ -314,7 +372,6 @@ async def cmd_admin(update, context):
     lines.append("\U0001f3ab \u5361\u5bc6: \u5df2\u7528" + str(used_cards) + "/\u603b\u8ba1" + str(total_cards))
     lines.append("\U0001f50d \u641c\u7d22\u70ed\u8bcd: " + str(len(keyword_popularity)))
     lines.append("\U0001f4c8 \u70b9\u51fb\u8bb0\u5f55: " + str(len(gallery_clicks)))
-
     if vip_users_list:
         lines.append("")
         lines.append("<b>\U0001f451 VIP\u7528\u6237\u5217\u8868:</b>")
@@ -327,7 +384,6 @@ async def cmd_admin(update, context):
             lines.append("  \u2022 " + str(uid) + " (" + exp_str + ")")
         if len(vip_users_list) > 10:
             lines.append("  ... \u8fd8\u6709 " + str(len(vip_users_list)-10) + " \u4e2a")
-
     if regular_users:
         lines.append("")
         lines.append("<b>\U0001f465 \u666e\u901a\u7528\u6237\u5217\u8868:</b>")
@@ -335,7 +391,6 @@ async def cmd_admin(update, context):
             lines.append("  \u2022 " + str(uid))
         if len(regular_users) > 10:
             lines.append("  ... \u8fd8\u6709 " + str(len(regular_users)-10) + " \u4e2a")
-
     stats = "\n".join(lines)
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("\u2705 \u8bbe\u7f6eVIP\u7528\u6237", callback_data="admin_setvip_prompt")],
@@ -343,6 +398,7 @@ async def cmd_admin(update, context):
         [InlineKeyboardButton("\U0001f50d \u67e5\u770b\u5168\u90e8\u7528\u6237", callback_data="admin_listusers")],
     ])
     await update.message.reply_text(stats, parse_mode="HTML", reply_markup=keyboard)
+
 
 
 async def cmd_stats(update, context):
@@ -358,10 +414,11 @@ async def cmd_stats(update, context):
     from scraper import gallery_clicks, keyword_popularity
     stats = (
         "📊 <b>统计数据</b>\n\n"
+        f"👥 用户: {len(ALL_USERS)} (其中普通用户 {len(ALL_USERS - set(VIP_USERS.keys()))})\n"
         f"👑 VIP: {total_vip} ({permanent}永久 + {timed}限时)\n"
         f"🔑 卡密: 已用{used_cards}/总计{total_cards}\n"
         f"🔍 搜索热词: {len(keyword_popularity)}\n"
-        f"📂 点击记录: {len(gallery_clicks)}"
+        f"📈 点击记录: {len(gallery_clicks)}"
     )
     await update.message.reply_text(stats, parse_mode="HTML")
 
@@ -461,6 +518,7 @@ async def handle_text(update, context):
         except ValueError:
             await update.message.reply_text("\u274c \u8bf7\u8f93\u5165\u6709\u6548\u7684\u7528\u6237ID\uff08\u6570\u5b57\uff09")
         return
+
 
     if text == "🔍 搜索":
         user_waiting_search.add(user_id)
@@ -723,26 +781,28 @@ async def handle_callback(update, context):
         elif data.startswith("zip_"):
             url = _get_url(data[4:])
             if not url:
-                await query.edit_message_text("⏳ 链接已过期。")
+                await query.edit_message_text("\u274c \u94fe\u63a5\u5df2\u8fc7\u671f\u3002")
                 return
             if not _is_vip(user_id):
-                await query.answer("👑 请先开通VIP会员", show_alert=True)
+                await query.answer("\U0001f451 \u8bf7\u5148\u5f00\u901aVIP\u4f1a\u5458", show_alert=True)
                 return
-            loading_msg = await query.message.reply_text("⏳ 正在获取下载链接...")
-            dl_link = extract_download_link(url)
+            loading_msg = await query.message.reply_text("\u23f3 \u6b63\u5728\u83b7\u53d6\u4e0b\u8f7d\u94fe\u63a5...")
+            short_link = extract_download_link(url)
             try:
                 await loading_msg.delete()
             except Exception:
                 pass
-            if dl_link:
-                text = f'📦 <b>原图压缩包</b>\n\n🔗 <a href="{dl_link}">TeraBox 下载</a>\n\n🔑 解压密码：<code>4KHD</code>'
+            if short_link:
+                text = '\U0001f4e6 <b>\u539f\u56fe\u538b\u7f29\u5305</b>\n\n\U0001f517 <a href="' + short_link + '">\u70b9\u51fb\u4e0b\u8f7d\u538b\u7f29\u5305</a>\n\n\u26a1 \u70b9\u51fb\u4e0a\u65b9\u94fe\u63a5\uff0c\u6d4f\u89c8\u5668\u4f1a\u81ea\u52a8\u8df3\u8f6c\u5230 TeraBox\n\n\U0001f513 \u89e3\u538b\u5bc6\u7801\uff1a<code>4KHD</code>'
             else:
-                text = f'📦 <b>原图压缩包</b>\n\n🔗 <a href="{url}">点击打开原网页</a>\n\n⚠️ 未找到下载链接，请从原网页提取'
+                text = '\U0001f4e6 <b>\u539f\u56fe\u538b\u7f29\u5305</b>\n\n\u26a0\ufe0f \u672a\u627e\u5230\u4e0b\u8f7d\u94fe\u63a5\uff0c\u8bf7\u4ece <a href="' + url + '">\u539f\u7f51\u9875</a> \u624b\u52a8\u63d0\u53d6'
             await query.edit_message_text(
                 text, parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+                    InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")
                 ]]))
+
+
         elif data == "vip_upgrade":
             user_id = update.effective_user.id
             if _is_vip(user_id):
@@ -1121,7 +1181,8 @@ def main():
         sys.exit(1)
 
     _load_vip()
-    logger.info(f"Loaded {len(VIP_USERS)} VIP users")
+    _load_users()
+    logger.info(f"Loaded {len(VIP_USERS)} VIP users, {len(ALL_USERS)} total users")
 
     async def _setup_commands(app):
         from telegram import BotCommand
@@ -1142,6 +1203,8 @@ def main():
     app.add_handler(CommandHandler("setvip", cmd_setvip))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("admin", cmd_admin))
+    app.add_handler(CommandHandler("admin", cmd_admin))
+    app.add_handler(CommandHandler("setvip", cmd_setvip))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
