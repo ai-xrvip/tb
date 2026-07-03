@@ -77,9 +77,10 @@ def _fix_image_url(src: str) -> Optional[str]:
     elif not src.startswith("http"):
         src = config.BASE_URL.rstrip("/") + "/" + src.lstrip("/")
     src = re.sub(r"https?://i\d+\.wp\.com/", "https://", src)
-    src = src.replace("pic.4khd.com", "img.4khd.com")
-    if "?" in src:
-        src = src.split("?")[0]
+    # Only strip known WordPress resize/optimization params, keep other query strings
+    src = re.sub(r"[?&](?:w|h|width|height|resize|fit|quality|ssl|strip)=\d+", "", src)
+    # Clean up trailing ? or &
+    src = re.sub(r"[?&]$", "", src)
     return src
 
 
@@ -350,21 +351,59 @@ def get_gallery_images(post_url: str, max_pages: int = None, max_images: int = N
 
 
 def extract_download_link(post_url: str) -> str:
+    """Extract terabox download link from post page.
+    Searches for mobile redirect link near download button area, then follows to terabox."""
     r = _fetch(post_url)
     if not r:
         return ""
-    m = re.search(r"https?://m\.4khd\.com/([a-zA-Z0-9]+)", r.text)
-    if not m:
-        return ""
-    short_code = m.group(1)
-    short_url = f"https://m.4khd.com/{short_code}"
-    logger.info(f"Found short link: {short_url}")
-    r2 = requests.get(short_url, headers=HEADERS, allow_redirects=True, timeout=15, verify=config.SSL_VERIFY)
-    if r2.status_code != 200:
-        return ""
-    m2 = re.search(r"https?://www\.terabox\.com/[^\s\"'<>]+", r2.text)
-    if m2:
-        return m2.group(0).rstrip("'\"")
+    soup = BeautifulSoup(r.text, "html.parser")
+    # Find download-related links in the content area only
+    content_area = soup.select_one("article, .entry-content, .post-body, .single-content, main") or soup
+    # Look for m.4khd.com redirect links (usually near "download" text)
+    download_links = []
+    for a in content_area.find_all("a", href=True):
+        href = a["href"]
+        if "m.4khd.com" in href or "linkurl" in href:
+            download_links.append(href)
+    if not download_links:
+        # Fallback: search whole page
+        m = re.search(r"https?://m\.4khd\.com/(?:linkurl/)?([a-zA-Z0-9]+)", r.text)
+        if not m:
+            return ""
+        download_links = [m.group(0)]
+    # Try each download link
+    for short_url in download_links:
+        if not short_url.startswith("http"):
+            if short_url.startswith("/"):
+                short_url = "https://m.4khd.com" + short_url
+            else:
+                short_url = "https://m.4khd.com/linkurl/" + short_url
+        logger.info(f"Trying download link: {short_url}")
+        try:
+            r2 = requests.get(short_url, headers=HEADERS, allow_redirects=True, timeout=15, verify=config.SSL_VERIFY)
+            if r2.status_code == 200:
+                # Check for terabox directly
+                m2 = re.search(r"https?://www\.terabox\.com/[^\s\"\'<>]+", r2.text)
+                if m2:
+                    result = m2.group(0).rstrip("\'\"")
+                    logger.info(f"Found terabox: {result[:80]}")
+                    return result
+                # Check for intermediate redirect page
+                m3 = re.search(r"https?://m\.4khd\.com/linkurl/\d+\?[^\s\"\'<>]+", r2.text)
+                if m3:
+                    next_url = m3.group(0).rstrip("\'\"")
+                    logger.info(f"Following intermediate: {next_url[:80]}")
+                    r3 = requests.get(next_url, headers=HEADERS, allow_redirects=True, timeout=15, verify=config.SSL_VERIFY)
+                    if r3.status_code == 200:
+                        m4 = re.search(r"https?://www\.terabox\.com/[^\s\"\'<>]+", r3.text)
+                        if m4:
+                            result = m4.group(0).rstrip("\'\"")
+                            logger.info(f"Found terabox (2 hops): {result[:80]}")
+                            return result
+            time.sleep(0.3)
+        except Exception as e:
+            logger.warning(f"Download link {short_url} failed: {e}")
+            continue
     return ""
 
 

@@ -9,6 +9,8 @@ import re
 import time
 import gc
 import html
+import secrets
+import string
 from datetime import datetime
 from collections import defaultdict
 from logging.handlers import RotatingFileHandler
@@ -53,14 +55,13 @@ RATE_LIMIT_MAX = config.MAX_SEARCHES_PER_MINUTE
 # ---- State (with TTL cleanup) ----
 user_search_state: dict = {}       # {user_id: {"page": int, "keyword": str, "results": list, "ts": float}}
 user_waiting_search: set = set()   # {user_id}
-url_store: dict = {}               # {key: {"url": str, "ts": float}}
+url_store: dict = {}
+admin_setvip_state: dict = {}  # admin setting VIP for a user               # {key: {"url": str, "ts": float}}
 url_counter: int = 0
 VIP_USERS: dict = {}               # {user_id: expiry_timestamp or None for permanent}
 VIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vip_users.json")
 CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards.json")
 user_waiting_card: set = set()     # {user_id}
-ALL_USERS: set = set()              # all users who ever used the bot
-USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
 # Per-user rate limiting: {user_id: [timestamp, ...]}
 _user_search_times: dict = defaultdict(list)
 _user_search_lock = Lock()
@@ -121,24 +122,6 @@ def _load_vip():
     except Exception as e:
         logger.error(f"Failed to load VIP: {e}")
         VIP_USERS = {}
-
-
-def _load_users():
-    global ALL_USERS
-    try:
-        if os.path.exists(USERS_FILE):
-            with open(USERS_FILE, "r", encoding="utf-8") as f:
-                ALL_USERS = set(json.load(f))
-    except Exception:
-        ALL_USERS = set()
-
-
-def _save_users():
-    try:
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(ALL_USERS), f)
-    except Exception:
-        pass
 
 
 def _load_cards() -> dict:
@@ -273,9 +256,6 @@ async def cmd_start(update, context):
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
     user_waiting_card.discard(user_id)
-    if user_id not in ALL_USERS:
-        ALL_USERS.add(user_id)
-        _save_users()
     await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
 
@@ -298,6 +278,7 @@ async def cmd_setvip(update, context):
 
 
 async def cmd_admin(update, context):
+    """Admin panel with stats, user lists, and management"""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         return
@@ -307,9 +288,9 @@ async def cmd_admin(update, context):
             target = int(args[1])
             VIP_USERS[target] = None
             _save_vip()
-            await update.message.reply_text(f"✅ 已将用户 {target} 设为VIP")
+            await update.message.reply_text(f"\u2705 \u5df2\u5c06\u7528\u6237 {target} \u8bbe\u4e3aVIP")
         except ValueError:
-            await update.message.reply_text("用户ID必须是数字")
+            await update.message.reply_text("\u7528\u6237ID\u5fc5\u987b\u662f\u6570\u5b57")
         return
     # Show admin panel
     total_vip = len(VIP_USERS)
@@ -319,21 +300,49 @@ async def cmd_admin(update, context):
     total_cards = len(cards)
     used_cards = sum(1 for c in cards.values() if c.get("used"))
     from scraper import gallery_clicks, keyword_popularity
-    stats = (
-        "📊 <b>管理员面板</b>\n\n"
-        f"👥 用户: {len(ALL_USERS)} (普通 {len(ALL_USERS - set(VIP_USERS.keys()))})\n"
-        f"👑 VIP: {total_vip} ({permanent}永久 + {timed}限时)\n"
-        f"🔑 卡密: 已用{used_cards}/总计{total_cards}\n"
-        f"🔍 搜索热词: {len(keyword_popularity)}\n"
-        f"📂 点击记录: {len(gallery_clicks)}"
-    )
-    await update.message.reply_text(
-        stats, parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ 设置VIP用户", switch_inline_query_current_chat=""),
-            InlineKeyboardButton("🔑 生成卡密", callback_data="admin_gencode")
-        ]])
-    )
+
+    regular_users = [uid for uid in ALL_USERS if uid not in VIP_USERS]
+    vip_users_list = [uid for uid in VIP_USERS if uid not in ADMIN_IDS]
+
+    lines = []
+    lines.append("\U0001f4ca <b>\u7ba1\u7406\u5458\u9762\u677f</b>")
+    lines.append("")
+    lines.append("\U0001f465 \u603b\u7528\u6237: " + str(len(ALL_USERS)))
+    lines.append("   \u666e\u901a\u7528\u6237: " + str(len(regular_users)))
+    lines.append("   VIP\u7528\u6237: " + str(total_vip) + " (" + str(permanent) + "\u6c38\u4e45 + " + str(timed) + "\u9650\u65f6)")
+    lines.append("")
+    lines.append("\U0001f3ab \u5361\u5bc6: \u5df2\u7528" + str(used_cards) + "/\u603b\u8ba1" + str(total_cards))
+    lines.append("\U0001f50d \u641c\u7d22\u70ed\u8bcd: " + str(len(keyword_popularity)))
+    lines.append("\U0001f4c8 \u70b9\u51fb\u8bb0\u5f55: " + str(len(gallery_clicks)))
+
+    if vip_users_list:
+        lines.append("")
+        lines.append("<b>\U0001f451 VIP\u7528\u6237\u5217\u8868:</b>")
+        for uid in vip_users_list[:10]:
+            exp = VIP_USERS.get(uid)
+            if exp is None:
+                exp_str = "\u6c38\u4e45"
+            else:
+                exp_str = datetime.fromtimestamp(exp).strftime("%m-%d")
+            lines.append("  \u2022 " + str(uid) + " (" + exp_str + ")")
+        if len(vip_users_list) > 10:
+            lines.append("  ... \u8fd8\u6709 " + str(len(vip_users_list)-10) + " \u4e2a")
+
+    if regular_users:
+        lines.append("")
+        lines.append("<b>\U0001f465 \u666e\u901a\u7528\u6237\u5217\u8868:</b>")
+        for uid in regular_users[:10]:
+            lines.append("  \u2022 " + str(uid))
+        if len(regular_users) > 10:
+            lines.append("  ... \u8fd8\u6709 " + str(len(regular_users)-10) + " \u4e2a")
+
+    stats = "\n".join(lines)
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("\u2705 \u8bbe\u7f6eVIP\u7528\u6237", callback_data="admin_setvip_prompt")],
+        [InlineKeyboardButton("\U0001f3ab \u751f\u6210\u5361\u5bc6", callback_data="admin_gencode")],
+        [InlineKeyboardButton("\U0001f50d \u67e5\u770b\u5168\u90e8\u7528\u6237", callback_data="admin_listusers")],
+    ])
+    await update.message.reply_text(stats, parse_mode="HTML", reply_markup=keyboard)
 
 
 async def cmd_stats(update, context):
@@ -349,11 +358,10 @@ async def cmd_stats(update, context):
     from scraper import gallery_clicks, keyword_popularity
     stats = (
         "📊 <b>统计数据</b>\n\n"
-        f"👥 用户: {len(ALL_USERS)} (其中普通用户 {len(ALL_USERS - set(VIP_USERS.keys()))})\n"
         f"👑 VIP: {total_vip} ({permanent}永久 + {timed}限时)\n"
         f"🔑 卡密: 已用{used_cards}/总计{total_cards}\n"
         f"🔍 搜索热词: {len(keyword_popularity)}\n"
-        f"📈 点击记录: {len(gallery_clicks)}"
+        f"📂 点击记录: {len(gallery_clicks)}"
     )
     await update.message.reply_text(stats, parse_mode="HTML")
 
@@ -435,6 +443,24 @@ async def cmd_random(update, context):
 async def handle_text(update, context):
     user_id = update.effective_user.id
     text = update.message.text.strip()
+
+    # Admin setting VIP user via text input
+    if user_id in admin_setvip_state and user_id in ADMIN_IDS:
+        del admin_setvip_state[user_id]
+        try:
+            target_id = int(text)
+            VIP_USERS[target_id] = None
+            _save_vip()
+            if target_id not in ALL_USERS:
+                ALL_USERS.add(target_id)
+                _save_users()
+            await update.message.reply_text(
+                "\u2705 \u5df2\u5c06\u7528\u6237 <code>" + str(target_id) + "</code> \u8bbe\u7f6e\u4e3aVIP\u6c38\u4e45\u4f1a\u5458",
+                parse_mode="HTML"
+            )
+        except ValueError:
+            await update.message.reply_text("\u274c \u8bf7\u8f93\u5165\u6709\u6548\u7684\u7528\u6237ID\uff08\u6570\u5b57\uff09")
+        return
 
     if text == "🔍 搜索":
         user_waiting_search.add(user_id)
@@ -733,6 +759,131 @@ async def handle_callback(update, context):
                         [InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")],
                         [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
                     ]))
+        elif data == "admin_gencode":
+            if user_id not in ADMIN_IDS:
+                await query.answer("\u274c \u65e0\u6743\u9650", show_alert=True)
+                return
+            cards = _load_cards()
+            generated = []
+            types = [
+                ("\U0001f4c5 \u6708\u5361(Y)", "Y", 30),
+                ("\U0001f4c5 \u5b63\u5361(J)", "J", 90),
+                ("\U0001f4c5 \u5e74\u5361(N)", "N", 360),
+                ("\U0001f4c5 \u6c38\u4e45(S)", "S", 0),
+            ]
+            for label, prefix, days in types:
+                for _ in range(10):
+                    code = prefix + "-" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+                    cards[code] = {"used": False, "used_by": None, "used_at": None, "type": prefix, "days": days, "created_by": user_id}
+                    generated.append(code)
+            _save_cards(cards)
+            gen_lines = []
+            gen_lines.append("\U0001f3ab <b>\u5df2\u751f\u6210 40 \u5f20\u5361\u5bc6</b>")
+            gen_lines.append("")
+            for label, prefix, days in types:
+                type_codes = [c for c in generated if c.startswith(prefix)]
+                gen_lines.append(label + ": " + str(len(type_codes)) + "\u5f20")
+            gen_lines.append("")
+            gen_lines.append("\u5361\u5bc6\u5df2\u4fdd\u5b58\u5230 cards.json\uff0c\u8bf7\u67e5\u770b\u6587\u4ef6\u5bfc\u51fa\u3002")
+            gen_text = "\n".join(gen_lines)
+            await query.edit_message_text(gen_text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("\U0001f519 \u8fd4\u56de\u7ba1\u7406\u9762\u677f", callback_data="admin_back")
+                ]]))
+
+        elif data == "admin_back":
+            if user_id not in ADMIN_IDS:
+                return
+            total_vip = len(VIP_USERS)
+            permanent = sum(1 for v in VIP_USERS.values() if v is None)
+            timed = total_vip - permanent
+            cards = _load_cards()
+            total_cards = len(cards)
+            used_cards = sum(1 for c in cards.values() if c.get("used"))
+            from scraper import gallery_clicks, keyword_popularity
+            regular_users = [uid for uid in ALL_USERS if uid not in VIP_USERS]
+            vip_users_list = [uid for uid in VIP_USERS if uid not in ADMIN_IDS]
+            bl = []
+            bl.append("\U0001f4ca <b>\u7ba1\u7406\u5458\u9762\u677f</b>")
+            bl.append("")
+            bl.append("\U0001f465 \u603b\u7528\u6237: " + str(len(ALL_USERS)))
+            bl.append("   \u666e\u901a\u7528\u6237: " + str(len(regular_users)))
+            bl.append("   VIP\u7528\u6237: " + str(total_vip) + " (" + str(permanent) + "\u6c38\u4e45 + " + str(timed) + "\u9650\u65f6)")
+            bl.append("")
+            bl.append("\U0001f3ab \u5361\u5bc6: \u5df2\u7528" + str(used_cards) + "/\u603b\u8ba1" + str(total_cards))
+            bl.append("\U0001f50d \u641c\u7d22\u70ed\u8bcd: " + str(len(keyword_popularity)))
+            bl.append("\U0001f4c8 \u70b9\u51fb\u8bb0\u5f55: " + str(len(gallery_clicks)))
+            if vip_users_list:
+                bl.append("")
+                bl.append("<b>\U0001f451 VIP\u7528\u6237:</b>")
+                for uid in vip_users_list[:5]:
+                    exp = VIP_USERS.get(uid)
+                    exp_str = "\u6c38\u4e45" if exp is None else datetime.fromtimestamp(exp).strftime("%m-%d")
+                    bl.append("  \u2022 " + str(uid) + " (" + exp_str + ")")
+                if len(vip_users_list) > 5:
+                    bl.append("  ... +" + str(len(vip_users_list)-5))
+            if regular_users:
+                bl.append("")
+                bl.append("<b>\U0001f465 \u666e\u901a\u7528\u6237:</b>")
+                for uid in regular_users[:5]:
+                    bl.append("  \u2022 " + str(uid))
+                if len(regular_users) > 5:
+                    bl.append("  ... +" + str(len(regular_users)-5))
+            stats = "\n".join(bl)
+            await query.edit_message_text(stats, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("\u2705 \u8bbe\u7f6eVIP\u7528\u6237", callback_data="admin_setvip_prompt")],
+                    [InlineKeyboardButton("\U0001f3ab \u751f\u6210\u5361\u5bc6", callback_data="admin_gencode")],
+                    [InlineKeyboardButton("\U0001f50d \u67e5\u770b\u5168\u90e8\u7528\u6237", callback_data="admin_listusers")],
+                ]))
+
+        elif data == "admin_setvip_prompt":
+            if user_id not in ADMIN_IDS:
+                await query.answer("\u274c \u65e0\u6743\u9650", show_alert=True)
+                return
+            admin_setvip_state[user_id] = True
+            await query.edit_message_text(
+                "\u2705 \u8bf7\u8f93\u5165\u8981\u8bbe\u7f6e\u4e3aVIP\u7684\u7528\u6237ID\uff1a\n\n\u4f8b\u5982\u76f4\u63a5\u53d1\u9001: 123456789",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("\u274c \u53d6\u6d88", callback_data="admin_back")
+                ]])
+            )
+
+        elif data == "admin_listusers":
+            if user_id not in ADMIN_IDS:
+                return
+            vip_data = [(uid, VIP_USERS[uid]) for uid in VIP_USERS if uid not in ADMIN_IDS]
+            regular = [uid for uid in ALL_USERS if uid not in VIP_USERS]
+            ll = []
+            ll.append("\U0001f4cb <b>\u5168\u90e8\u7528\u6237\u5217\u8868</b>")
+            ll.append("")
+            ll.append("\U0001f451 <b>VIP\u7528\u6237 (" + str(len(vip_data)) + "):</b>")
+            if vip_data:
+                for uid, exp in vip_data:
+                    if exp is None:
+                        exp_str = "\u6c38\u4e45"
+                    else:
+                        rem = max(0, int((exp - time.time()) / 86400))
+                        exp_str = "\u5269" + str(rem) + "\u5929"
+                    ll.append("  \u2022 <code>" + str(uid) + "</code> - " + exp_str)
+            else:
+                ll.append("  \u6682\u65e0")
+            ll.append("")
+            ll.append("\U0001f465 <b>\u666e\u901a\u7528\u6237 (" + str(len(regular)) + "):</b>")
+            if regular:
+                for uid in regular:
+                    ll.append("  \u2022 <code>" + str(uid) + "</code>")
+            else:
+                ll.append("  \u6682\u65e0")
+            text = "\n".join(ll)
+            if len(text) > 4000:
+                text = text[:4000] + "\n\n... \u5217\u8868\u8fc7\u957f\u5df2\u622a\u65ad"
+            await query.edit_message_text(text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("\U0001f519 \u8fd4\u56de\u7ba1\u7406\u9762\u677f", callback_data="admin_back")
+                ]]))
+
+
     except Exception as e:
         logger.error(f"Callback error: {traceback.format_exc()}")
         try:
@@ -970,8 +1121,7 @@ def main():
         sys.exit(1)
 
     _load_vip()
-    _load_users()
-    logger.info(f"Loaded {len(VIP_USERS)} VIP users, {len(ALL_USERS)} total users")
+    logger.info(f"Loaded {len(VIP_USERS)} VIP users")
 
     async def _setup_commands(app):
         from telegram import BotCommand
@@ -992,7 +1142,6 @@ def main():
     app.add_handler(CommandHandler("setvip", cmd_setvip))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("admin", cmd_admin))
-    app.add_handler(CommandHandler("setvip", cmd_setvip))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
