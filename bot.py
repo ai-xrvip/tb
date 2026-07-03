@@ -31,6 +31,9 @@ from scraper import (
 )
 
 # ---- Logging ----
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 _log_handler = RotatingFileHandler(
     os.path.join(DATA_DIR, "bot.log"),
     maxBytes=5 * 1024 * 1024,  # 5 MB
@@ -59,9 +62,6 @@ url_store: dict = {}
 admin_setvip_state: dict = {}               # {key: {"url": str, "ts": float}}
 url_counter: int = 0
 VIP_USERS: dict = {}               # {user_id: expiry_timestamp or None for permanent}
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-os.makedirs(DATA_DIR, exist_ok=True)
-
 VIP_FILE = os.path.join(DATA_DIR, "vip_users.json")
 CARD_FILE = os.path.join(DATA_DIR, "cards.json")
 user_waiting_card: set = set()     # {user_id}
