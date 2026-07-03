@@ -546,7 +546,7 @@ async def handle_text(update, context):
         user_waiting_card.discard(user_id)
 
         # Rate limit card activation attempts (prevent brute force)
-    if not _is_vip(user_id) and not _check_rate_limit(user_id):
+        if not _is_vip(user_id) and not _check_rate_limit(user_id):
             await update.message.reply_text(
                 "⏱ 操作太频繁，请稍后再试。"
             )
