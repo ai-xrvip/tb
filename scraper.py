@@ -437,6 +437,7 @@ async def get_random_gallery() -> Optional[dict]:
     """Get a random gallery recommendation based on popular clicks and hot keywords."""
     results = []
     seen_urls = set()
+    top_urls = []
     async with _click_lock:
         if gallery_clicks:
             sorted_clicks = sorted(gallery_clicks.items(), key=lambda x: x[1], reverse=True)
