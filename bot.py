@@ -634,6 +634,11 @@ async def _do_search(update, keyword):
         logger.error(f"4KHD search error: {traceback.format_exc()}")
         merged = []
 
+    try:
+        await loading.delete()
+    except Exception:
+        pass
+
     if not merged:
         await msg.reply_text(
             "😔 没有找到相关图集，换个关键词试试吧～",
@@ -647,6 +652,11 @@ async def _do_search(update, keyword):
         "page": 0, "keyword": keyword, "results": merged, "ts": _now()
     }
     state = user_search_state[user_id]
+    try:
+        await loading.delete()
+    except Exception:
+        pass
+
     await _show_results_page(msg, user_id)
 
 
