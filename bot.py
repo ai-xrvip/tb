@@ -32,7 +32,7 @@ from scraper import (
 
 # ---- Logging ----
 _log_handler = RotatingFileHandler(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.log"),
+    os.path.join(DATA_DIR, "bot.log"),
     maxBytes=5 * 1024 * 1024,  # 5 MB
     backupCount=2,
     encoding="utf-8",
@@ -59,11 +59,14 @@ url_store: dict = {}
 admin_setvip_state: dict = {}               # {key: {"url": str, "ts": float}}
 url_counter: int = 0
 VIP_USERS: dict = {}               # {user_id: expiry_timestamp or None for permanent}
-VIP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vip_users.json")
-CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards.json")
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+VIP_FILE = os.path.join(DATA_DIR, "vip_users.json")
+CARD_FILE = os.path.join(DATA_DIR, "cards.json")
 user_waiting_card: set = set()     # {user_id}
 ALL_USERS: set = set()              # all users who ever used the bot
-USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
 
 # Async locks for thread-safe state access
 _state_lock = asyncio.Lock()
