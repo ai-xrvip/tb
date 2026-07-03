@@ -1166,6 +1166,10 @@ def main():
         sys.exit(1)
     _load_vip()
     _load_users()
+    # Seed admin VIP if empty
+    if not VIP_USERS:
+        VIP_USERS[5405770555] = None
+        _save_vip()
     logger.info(f"Loaded {len(VIP_USERS)} VIP users, {len(ALL_USERS)} total users")
 
     async def _setup_commands(app):
