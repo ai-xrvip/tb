@@ -351,61 +351,43 @@ def get_gallery_images(post_url: str, max_pages: int = None, max_images: int = N
 
 
 def extract_download_link(post_url: str) -> str:
-    """Extract the m.4khd.com short link from post page.
-    The m.4khd.com page requires JavaScript (Cloudflare) to resolve to TeraBox,
-    so we return the short link directly. Users click it and their browser handles the redirect."""
+    """Extract the real TeraBox download link by resolving m.4khd.com short URL."""
     r = _fetch(post_url)
     if not r:
         return ""
+
+    # 1. Find the m.4khd.com short link in the post page
     soup = BeautifulSoup(r.text, "html.parser")
-    # Find the download link in content area (usually labeled "TeraBox")
     content_area = soup.select_one("article, .entry-content, .post-body, .single-content, main") or soup
+    short_link = ""
     for a in content_area.find_all("a", href=True):
-        href = a["href"]
-        text = a.get_text(strip=True).lower()
-        if "m.4khd.com" in href and "faq" not in href:
-            logger.info(f"Found short link: {href}")
-            return href
-    # Fallback: search whole page with regex
-    m = re.search(r"https?://m\.4khd\.com/([a-zA-Z0-9]+)", r.text)
-    if m:
-        code = m.group(1)
-        if code != "faq":
-            return m.group(0)
-    return ""
+        if "m.4khd.com" in a["href"] and "faq" not in a["href"]:
+            short_link = a["href"]
+            break
+    if not short_link:
+        m = re.search(r"https?://m\.4khd\\.com/([a-zA-Z0-9]+)", r.text)
+        if m and m.group(1) != "faq":
+            short_link = m.group(0)
+    if not short_link:
+        return ""
 
+    logger.info(f"Short link: {short_link}")
 
-def get_random_gallery() -> Optional[dict]:
-    results = []
-    seen_urls = set()
-    if gallery_clicks:
-        sorted_clicks = sorted(gallery_clicks.items(), key=lambda x: x[1], reverse=True)
-        top_urls = [url for url, _ in sorted_clicks[:5]]
-        random.shuffle(top_urls)
-        for url in top_urls:
-            title = gallery_titles.get(url, "")
-            keywords = title.split()[:3] if title else []
-            kw = " ".join(keywords) if keywords else ""
-            if kw:
-                similar = search_galleries(kw, max_results=3, max_pages=1)
-                for r in similar:
-                    if r["url"] not in seen_urls:
-                        results.append(r)
-                        seen_urls.add(r["url"])
-    hot_kws = get_hot_keywords(top_n=3)
-    for kw in hot_kws:
-        search_results = search_galleries(kw, max_results=10, max_pages=1)
-        for r in search_results:
-            if r["url"] not in seen_urls:
-                results.append(r)
-                seen_urls.add(r["url"])
-    if results:
-        weighted = []
-        for r in results:
-            weight = gallery_clicks.get(r["url"], 0) + 1
-            weighted.extend([r] * weight)
-        return random.choice(weighted)
-    results = search_galleries("cosplay", max_results=30, max_pages=1)
-    if not results:
-        results = search_galleries("", max_results=30, max_pages=1)
-    return random.choice(results) if results else None
+    # 2. Resolve the short link to get the real TeraBox URL
+    try:
+        r2 = requests.get(short_link, headers=HEADERS, timeout=config.REQUEST_TIMEOUT, verify=config.SSL_VERIFY)
+        if r2.status_code == 200:
+            m2 = re.search(r'https?://www\.terabox\.com[^\s"\'<>]+', r2.text)
+            if m2:
+                terabox_url = m2.group(0).rstrip("\"").rstrip("'")
+                logger.info(f"Resolved to: {terabox_url}")
+                return terabox_url
+            logger.warning("m.4khd page found but no TeraBox URL in response")
+        else:
+            logger.warning(f"m.4khd returned HTTP {r2.status_code}")
+    except Exception as e:
+        logger.warning(f"Failed to resolve m.4khd link: {e}")
+
+    # 3. Fallback: return the short link if resolution fails
+    return short_link
+
