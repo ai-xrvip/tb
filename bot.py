@@ -246,7 +246,7 @@ def _is_vip(user_id):
 async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"):
     try:
         if isinstance(msg_or_query, Message):
-            await msg_or_query.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await msg_or_query.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
         else:
             await msg_or_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except Exception as e:
@@ -655,11 +655,6 @@ async def _do_search(update, keyword):
         "page": 0, "keyword": keyword, "results": merged, "ts": _now()
     }
     state = user_search_state[user_id]
-    try:
-        await loading.delete()
-    except Exception:
-        pass
-
     logger.info(f"DEBUG calling _show_results_page with {len(merged)} results")
     await _show_results_page(msg, user_id)
 
