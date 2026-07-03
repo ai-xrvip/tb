@@ -29,6 +29,7 @@ from seed_cards import SEED_CARDS
 from scraper import (
     search_galleries, get_gallery_images, get_random_gallery,
     download_image, track_click,
+    search_xchina, get_xchina_gallery,
 )
 
 # ---- Logging ----
@@ -614,7 +615,6 @@ async def handle_text(update, context):
 
     # Search flow
     if user_id not in user_waiting_search:
-        logger.info(f"DEBUG handle_text: user {user_id} NOT in waiting_search, text={text!r}")
         return
     user_waiting_search.discard(user_id)
     keyword = text
@@ -626,8 +626,7 @@ async def handle_text(update, context):
 
 
 async def _do_search(update, keyword):
-    """Search both 4KHD and E-Hentai, merge results by date."""
-    logger.info(f"DEBUG _do_search: keyword={keyword!r}")
+    """Search 4KHD + XChina in parallel, merge results."""
     msg = update.message
     loading = await msg.reply_text("🔍 正在搜索中，请稍候...")
 
@@ -643,12 +642,31 @@ async def _do_search(update, keyword):
         )
         return
 
+    # Search both sources in parallel
+    hd_task = asyncio.create_task(search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS))
+    xc_task = asyncio.create_task(search_xchina(keyword, max_results=config.MAX_SEARCH_RESULTS))
+    
+    hd_results = []
+    xc_results = []
     try:
-        merged = await search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS)
-        logger.info(f"DEBUG search returned {len(merged)} results")
+        hd_results = await hd_task
     except Exception as e:
         logger.error(f"4KHD search error: {traceback.format_exc()}")
-        merged = []
+    try:
+        xc_results = await xc_task
+    except Exception as e:
+        logger.error(f"XChina search error: {traceback.format_exc()}")
+    
+    # Interleave results for variety
+    merged = []
+    i, j = 0, 0
+    while i < len(hd_results) or j < len(xc_results):
+        if i < len(hd_results):
+            merged.append(hd_results[i])
+            i += 1
+        if j < len(xc_results):
+            merged.append(xc_results[j])
+            j += 1
 
     try:
         await loading.delete()
@@ -668,7 +686,6 @@ async def _do_search(update, keyword):
         "page": 0, "keyword": keyword, "results": merged, "ts": _now()
     }
     state = user_search_state[user_id]
-    logger.info(f"DEBUG calling _show_results_page with {len(merged)} results")
     await _show_results_page(msg, user_id)
 
 
@@ -777,6 +794,17 @@ async def handle_callback(update, context):
                 return
             loading_msg = await query.message.reply_text("⏳ 正在获取图集详情，请稍候...")
             await _send_gallery_detail(update, url)
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
+        elif data.startswith("x_"):
+            url = _get_url(data[2:])
+            if not url:
+                await query.edit_message_text("❌ 链接已过期，请重新搜索。")
+                return
+            loading_msg = await query.message.reply_text("⏳ 正在获取图集详情...")
+            await _send_xchina_detail(update, url)
             try:
                 await loading_msg.delete()
             except Exception:
@@ -988,11 +1016,11 @@ async def _show_results_page(msg_or_query, user_id):
     for i, r in enumerate(page_results):
         idx = start + i + 1
         clean_title = _clean_title(r["title"])
-        source_badge = "\U0001f4f7"
+        source_badge = "🌐" if r.get("source") == "xchina" else "📷"
         text += f"{idx}. {source_badge} {html.escape(clean_title)}\n"
         btn_label = clean_title[:20] + ".." if len(clean_title) > 22 else clean_title[:22]
         url_key = await _store_url(r["url"])
-        prefix = "d_"
+        prefix = "x_" if r.get("source") == "xchina" else "d_"
         buttons.append([InlineKeyboardButton(f"{source_badge} {idx}. {btn_label}", callback_data=prefix + url_key)])
 
     # Pagination buttons — limited by accessible pages, not full_pages
@@ -1014,6 +1042,53 @@ async def _show_results_page(msg_or_query, user_id):
 
 
 
+
+async def _send_xchina_detail(update, url):
+    user_id = update.effective_user.id
+    try:
+        detail = await get_xchina_gallery(url)
+    except Exception as e:
+        logger.error(f"XC detail error: {traceback.format_exc()}")
+        await update.effective_message.reply_text("❌ 获取图集失败，请稍后再试。")
+        return
+
+    title = detail.get("title", "Unknown")
+    cover = detail.get("cover")
+    cover_bytes = detail.get("cover_bytes")
+    count = detail.get("count", 0)
+    images = detail.get("images", [])
+
+    clean_title = _clean_title(title)
+    text = f"🌐 <b>{html.escape(clean_title)}</b>"
+    if count:
+        text += f"\n📸 {count}P"
+    text += "\n📌 来源: XChina"
+
+    url_key = await _store_url(url)
+    buttons = []
+    if images:
+        buttons.append([InlineKeyboardButton("🖼 查看完整图集", callback_data="f_" + url_key)])
+    buttons.append([InlineKeyboardButton("🔗 查看原网页", url=url)])
+    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
+
+    keyboard = InlineKeyboardMarkup(buttons)
+    sent = False
+    if cover_bytes:
+        img_data, img_ct = cover_bytes
+        try:
+            img_data.seek(0)
+            await update.effective_message.reply_photo(photo=img_data, caption=text, reply_markup=keyboard, parse_mode="HTML")
+            sent = True
+        except Exception:
+            logger.error("XC cover send failed: " + traceback.format_exc())
+    if not sent and cover:
+        try:
+            await update.effective_message.reply_photo(photo=cover, caption=text, reply_markup=keyboard, parse_mode="HTML")
+            sent = True
+        except Exception:
+            logger.error("XC cover url send failed: " + traceback.format_exc())
+    if not sent:
+        await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def _send_gallery_detail(update, url, gallery_data=None):
     user_id = update.effective_user.id
@@ -1062,13 +1137,29 @@ async def _send_gallery_detail(update, url, gallery_data=None):
 
 async def _send_gallery_full(update, url):
     user_id = update.effective_user.id
-    try:
-        gallery_data = await get_gallery_images(url)
-    except Exception:
-        logger.error("Full gallery error: " + traceback.format_exc())
-        await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
-        return
-    all_images = gallery_data["images"]
+    
+    # Detect source: xchina URLs contain /photo/id-
+    is_xchina = "/photo/id-" in url
+    if is_xchina:
+        # Use sequential URL pattern for xchina
+        import re as _re
+        gid = _re.search(r"/id-([a-f0-9]+)", url)
+        if gid:
+            gallery_id = gid.group(1)
+            max_imgs = config.MAX_IMAGES_PER_POST
+            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
+        else:
+            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+            return
+    else:
+        try:
+            gallery_data = await get_gallery_images(url)
+        except Exception:
+            logger.error("Full gallery error: " + traceback.format_exc())
+            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+            return
+        all_images = gallery_data["images"]
+
     total_pages = (len(all_images) + 9) // 10
     preview = all_images[:10]
     media = []
@@ -1101,12 +1192,26 @@ async def _send_gallery_page(update, url, page=0):
     user_id = update.effective_user.id
     if not _is_vip(user_id):
         return
-    try:
-        gallery_data = await get_gallery_images(url)
-    except Exception:
-        await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
-        return
-    all_images = gallery_data["images"]
+    
+    # Detect xchina URLs
+    is_xchina = "/photo/id-" in url
+    if is_xchina:
+        import re as _re
+        gid = _re.search(r"/id-([a-f0-9]+)", url)
+        if gid:
+            gallery_id = gid.group(1)
+            max_imgs = config.MAX_IMAGES_PER_POST
+            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
+        else:
+            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+            return
+    else:
+        try:
+            gallery_data = await get_gallery_images(url)
+        except Exception:
+            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+            return
+        all_images = gallery_data["images"]
     total_pages = (len(all_images) + 9) // 10
     start = page * 10
     end = start + 10

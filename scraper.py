@@ -474,3 +474,196 @@ async def get_random_gallery() -> Optional[dict]:
         results = await search_galleries("", max_results=30, max_pages=1)
     return random.choice(results) if results else None
 
+
+# ========== XChina.co ==========
+
+XC_BASE = "https://xchina.co"
+XC_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+}
+
+
+async def _xc_fetch(url: str, retries: int = 2) -> str | None:
+    """Fetch xchina.co page with browser-like headers."""
+    client = await _get_client()
+    for attempt in range(retries):
+        try:
+            r = await client.get(url, headers=XC_HEADERS, follow_redirects=True)
+            if r.status_code == 200:
+                return r.text
+            logger.warning(f"XC HTTP {r.status_code} for {url[:60]} (attempt {attempt+1})")
+            await asyncio.sleep(1)
+        except Exception as e:
+            logger.warning(f"XC fetch error {url[:60]}: {e}")
+            await asyncio.sleep(1)
+    return None
+
+
+def _extract_xc_gallery_id(url: str) -> str:
+    """Extract gallery ID from xchina photo URL like /photo/id-6a4383664c43b.html"""
+    m = re.search(r"/id-([a-f0-9]+)\.html", url)
+    return m.group(1) if m else ""
+
+
+def _parse_xc_count(count_str: str) -> int:
+    """Parse '1128P' or '294P + 1V' into integer photo count."""
+    m = re.search(r"(\d+)\s*P", count_str)
+    return int(m.group(1)) if m else 0
+
+
+async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 3) -> list[dict]:
+    """Search xchina.co photo galleries."""
+    if max_results is None:
+        max_results = config.MAX_SEARCH_RESULTS
+
+    cache_key = f"xc:{keyword.lower()}"
+    cached = await _cache_get(cache_key)
+    if cached is not None:
+        return list(cached)[:max_results]
+
+    if keyword.strip():
+        search_url = f"{XC_BASE}/photos/keyword-{urllib.parse.quote(keyword)}.html"
+    else:
+        search_url = f"{XC_BASE}/photos.html"
+
+    logger.info(f"XC search: {search_url}")
+    all_results = []
+    seen_urls = set()
+
+    for page in range(1, max_pages + 1):
+        url = search_url if page == 1 else f"{XC_BASE}/photos.html?page={page}"
+        if page > 1 and keyword.strip():
+            # Search results might not support ?page=, skip pagination for search
+            break
+
+        text = await _xc_fetch(url)
+        if not text:
+            continue
+
+        soup = BeautifulSoup(text, "html.parser")
+        items = soup.select(".item.photo")
+        if not items:
+            break
+
+        for item in items:
+            # Title & URL
+            title_a = item.select_one(".title a")
+            if not title_a:
+                continue
+            title = title_a.text.strip()
+            href = title_a.get("href", "")
+            if not href.startswith("http"):
+                href = XC_BASE + href
+
+            if href in seen_urls:
+                continue
+            seen_urls.add(href)
+
+            # Thumbnail from background-image style
+            cover = None
+            img_div = item.select_one(".img")
+            if img_div:
+                style = img_div.get("style", "")
+                m = re.search(r"url\('([^']+)'\)", style)
+                if m:
+                    cover = m.group(1)
+
+            # Photo count
+            count_str = ""
+            tags_div = item.select_one(".tags")
+            if tags_div:
+                first_div = tags_div.find("div")
+                if first_div:
+                    count_str = first_div.text.strip()
+
+            all_results.append({
+                "title": title,
+                "url": href,
+                "cover": cover,
+                "count": count_str,
+                "source": "xchina",
+            })
+
+            if len(all_results) >= max_results:
+                await _cache_set(cache_key, all_results)
+                logger.info(f"XC found {len(all_results)} results for {keyword!r}")
+                return all_results
+
+        if len(items) < 20:  # Fewer items = last page
+            break
+        await asyncio.sleep(0.3)
+
+    await _cache_set(cache_key, all_results)
+    logger.info(f"XC found {len(all_results)} results for {keyword!r}")
+    return all_results
+
+
+async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
+    """Get xchina gallery details and image list."""
+    if max_images is None:
+        max_images = config.MAX_IMAGES_PER_POST
+
+    cache_key = f"xc_gallery:{url}"
+    cached = await _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    gallery_id = _extract_xc_gallery_id(url)
+    logger.info(f"XC gallery: {url} (id={gallery_id})")
+
+    text = await _xc_fetch(url)
+    result = {
+        "title": "", "cover": None, "cover_bytes": None,
+        "images": [], "count": 0, "source": "xchina", "url": url,
+    }
+
+    if not text:
+        return result
+
+    soup = BeautifulSoup(text, "html.parser")
+
+    # Title
+    h1 = soup.find("h1")
+    if h1:
+        result["title"] = h1.text.strip()
+
+    # Extract all image URLs from background-image styles
+    import re as re_mod
+    img_urls = re_mod.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+_600x0\.webp", text)
+    seen = set()
+    images = []
+    for u in img_urls:
+        if u not in seen:
+            seen.add(u)
+            images.append(u)
+
+    # If no images found from HTML, generate from pattern
+    if not images and gallery_id:
+        # Try up to 20 images by pattern
+        for i in range(1, min(max_images + 1, 21)):
+            images.append(f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp")
+
+    result["images"] = images[:max_images]
+
+    # Photo count
+    count_text = ""
+    tags_div = soup.select_one(".tags, .photo-info")
+    if tags_div:
+        count_text = tags_div.text.strip()
+    count = _parse_xc_count(count_text)
+    if count == 0:
+        count = len(images)
+    result["count"] = count
+
+    # Cover = first image
+    if images:
+        result["cover"] = images[0]
+        # Download cover
+        img_result = await _fetch_bytes(images[0], referer=url)
+        if img_result:
+            result["cover_bytes"] = img_result
+
+    await _cache_set(cache_key, result)
+    return result
