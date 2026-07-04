@@ -134,6 +134,11 @@ async def search_ehentai(keyword: str, max_results: int = 20, max_pages: int = M
             torrent_link = row.select_one("a[href*='gallerytorrents.php']")
             has_torrent = bool(torrent_link)
 
+            # Extract publish date from row text
+            row_text = row.get_text(" ", strip=True)
+            date_m = re.search(r"(\d{4}-\d{2}-\d{2})", row_text)
+            publish_date = date_m.group(1) if date_m else ""
+
             results.append({
                 "title": title,
                 "url": href,
@@ -143,6 +148,7 @@ async def search_ehentai(keyword: str, max_results: int = 20, max_pages: int = M
                 "has_torrent": has_torrent,
                 "gid": m.group(1),
                 "token": m.group(2),
+                "publish_date": publish_date,
             })
 
             if len(results) >= max_results:
