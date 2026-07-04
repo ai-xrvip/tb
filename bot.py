@@ -83,7 +83,7 @@ _user_search_lock = asyncio.Lock()
 ADMIN_IDS = config.ADMIN_IDS
 
 # Semaphore to limit concurrent image downloads (prevents resource exhaustion)
-_download_sem = asyncio.Semaphore(5)
+_download_sem = asyncio.Semaphore(20)
 
 MENU_KEYBOARD = ReplyKeyboardMarkup([
     [KeyboardButton("🔍 搜索"), KeyboardButton("🎲 推荐"), KeyboardButton("👑 VIP"), KeyboardButton("👤 我的")],
