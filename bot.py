@@ -1,6 +1,7 @@
 ﻿"""Gallery Search Bot - Telegram Bot (async)"""
 import asyncio
 # Version: async-httpx-v2
+import httpx
 import logging
 import sys
 import os
