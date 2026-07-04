@@ -26,6 +26,7 @@ class Config:
 
     # Webhook (leave empty for polling mode)
     WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")
+    WEBHOOK_PORT: int = int(os.getenv("PORT", "8000"))
 
     USER_AGENT: str = os.getenv(
         "USER_AGENT",

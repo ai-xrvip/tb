@@ -1353,14 +1353,13 @@ def main():
             asyncio.create_task(_periodic_cleanup(app))
             await app.bot.set_webhook(url=config.WEBHOOK_URL + "/webhook")
             logger.info("Webhook set.")
-            try:
-                while True:
-                    await asyncio.sleep(60)
-                    me = await app.bot.get_me()
-                    if not me:
-                        logger.warning("Health check: bot not responding, attempting restart...")
-            except asyncio.CancelledError:
-                await shutdown(app)
+            # Start HTTP server to receive webhook updates
+            await app.run_webhook(
+                listen="0.0.0.0",
+                port=config.WEBHOOK_PORT,
+                url_path="webhook",
+                webhook_url=config.WEBHOOK_URL + "/webhook",
+            )
         try:
             asyncio.run(_start_webhook())
         except KeyboardInterrupt:
