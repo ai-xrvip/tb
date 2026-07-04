@@ -565,6 +565,14 @@ def _parse_xc_count(count_str: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def _extract_xc_date(text: str) -> str:
+    """Extract date like 2026.07.03 or 2026-07-03 from text."""
+    m = re.search(r"(20\d{2}[./-]\d{1,2}[./-]\d{1,2})", text)
+    if m:
+        return m.group(1).replace("-", ".").replace("/", ".")
+    return ""
+
+
 async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 3) -> list[dict]:
     """Search xchina.co photo galleries."""
     if max_results is None:
@@ -630,12 +638,17 @@ async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 
                 if first_div:
                     count_str = first_div.text.strip()
 
+            # Extract date from item text
+            item_text = item.get_text(" ", strip=True)
+            publish_date = _extract_xc_date(item_text)
+
             all_results.append({
                 "title": title,
                 "url": href,
                 "cover": cover,
                 "count": count_str,
                 "source": "xchina",
+                "publish_date": publish_date,
             })
 
             if len(all_results) >= max_results:
@@ -669,6 +682,7 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
     result = {
         "title": "", "cover": None, "cover_bytes": None,
         "images": [], "count": 0, "source": "xchina", "url": url,
+        "publish_date": "",
     }
 
     if not text:
@@ -676,10 +690,12 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
 
     soup = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, text, "html.parser")
 
-    # Title
+    # Title & date
     h1 = soup.find("h1")
     if h1:
         result["title"] = h1.text.strip()
+    # Extract date from page text
+    result["publish_date"] = _extract_xc_date(text)
 
     # Extract all image URLs from background-image styles
     import re as re_mod
