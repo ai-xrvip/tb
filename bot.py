@@ -1242,7 +1242,7 @@ async def _send_gallery_page(update, url, page=0):
         if gid:
             gallery_id = gid.group(1)
             max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
-            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i}_600x0.webp" for i in range(1, max_imgs + 1)]
+            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
         else:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
             return
@@ -1268,7 +1268,7 @@ async def _send_gallery_page(update, url, page=0):
         async with _download_sem:
             return await download_image(img_url, referer=url)
     
-    tasks = [_dl_one(u) for u in preview]
+    tasks = [_dl_one(u) for u in page_images]
     results_list = await asyncio.gather(*tasks)
     for result in results_list:
         if result:

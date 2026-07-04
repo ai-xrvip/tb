@@ -728,6 +728,7 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
         if img_urls:
             img_urls = [u.replace(".webp", "_600x0.webp") if "_600x0" not in u else u for u in img_urls]
     images = []
+    seen = set()
     for u in img_urls:
         if u not in seen:
             seen.add(u)
