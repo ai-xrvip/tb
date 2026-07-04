@@ -1208,16 +1208,18 @@ async def _send_eh_detail(update, url):
     buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
 
-    # Download EH cover (direct URL may not be accepted by TG)
+    # Download EH cover (H@H network needs referer)
     cover_bytes = None
     if cover:
         try:
-            async with httpx.AsyncClient(timeout=15) as cl:
+            async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://e-hentai.org/"}) as cl:
                 cr = await cl.get(cover)
-                if cr.status_code == 200:
+                if cr.status_code == 200 and len(cr.content) > 1000:
                     cover_bytes = cr.content
-        except Exception:
-            pass
+                else:
+                    logger.warning(f"EH cover bad: status={cr.status_code} size={len(cr.content)}")
+        except Exception as ex:
+            logger.warning(f"EH cover download failed: {ex}")
 
     sent = False
     if cover_bytes:
