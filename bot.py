@@ -1180,7 +1180,7 @@ async def _send_gallery_full(update, url):
         if gid:
             gallery_id = gid.group(1)
             max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
-            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i}_600x0.webp" for i in range(1, max_imgs + 1)]
+            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
         else:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
             return

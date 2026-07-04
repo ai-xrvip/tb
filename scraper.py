@@ -1,4 +1,4 @@
-"""4KHD.com scraper - search galleries and extract images (async version)"""
+﻿"""4KHD.com scraper - search galleries and extract images (async version)"""
 import re
 import asyncio
 import random
@@ -727,11 +727,6 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
         img_urls = re_mod.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+\.webp", text)
         if img_urls:
             img_urls = [u.replace(".webp", "_600x0.webp") if "_600x0" not in u else u for u in img_urls]
-    if not img_urls:
-        img_urls = re_mod.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+\.webp", text)
-        if img_urls:
-            img_urls = [u.replace(".webp", "_600x0.webp") if "_600x0" not in u else u for u in img_urls]
-    seen = set()
     images = []
     for u in img_urls:
         if u not in seen:
@@ -742,7 +737,7 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
     if not images and gallery_id:
         # Try without leading zeros first (common format)
         for i in range(1, min(max_images + 1, 21)):
-            images.append(f"https://img.xchina.io/photos/{gallery_id}/{i}_600x0.webp")
+            images.append(f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp")
 
     result["images"] = images[:max_images]
 
