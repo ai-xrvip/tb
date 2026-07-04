@@ -859,7 +859,7 @@ async def handle_callback(update, context):
             if not url:
                 await query.edit_message_text("❌ 链接已过期")
                 return
-            loading_msg = await query.message.reply_text("⏳ 正在获取EH图集...")
+            loading_msg = await query.message.reply_text("⏳ 正在获取图集详情，请稍候...")
             await _send_eh_detail(update, url)
             try:
                 await loading_msg.delete()
@@ -1208,12 +1208,31 @@ async def _send_eh_detail(update, url):
     buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
 
+    # Download EH cover (direct URL may not be accepted by TG)
+    cover_bytes = None
     if cover:
         try:
-            await update.effective_message.reply_photo(photo=cover, caption=text, reply_markup=keyboard, parse_mode="HTML")
+            async with httpx.AsyncClient(timeout=15) as cl:
+                cr = await cl.get(cover)
+                if cr.status_code == 200:
+                    cover_bytes = cr.content
         except Exception:
-            await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
-    else:
+            pass
+
+    sent = False
+    if cover_bytes:
+        try:
+            await update.effective_message.reply_photo(photo=cover_bytes, caption=text, reply_markup=keyboard, parse_mode="HTML")
+            sent = True
+        except Exception:
+            pass
+    if not sent and cover:
+        try:
+            await update.effective_message.reply_photo(photo=cover, caption=text, reply_markup=keyboard, parse_mode="HTML")
+            sent = True
+        except Exception:
+            pass
+    if not sent:
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def _send_gallery_detail(update, url, gallery_data=None, from_random=False):
