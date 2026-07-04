@@ -136,7 +136,7 @@ def _load_vip():
     global VIP_USERS
     try:
         if os.path.exists(VIP_FILE):
-            with open(VIP_FILE, "r", encoding="utf-8") as f:
+            with open(VIP_FILE, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
                 if isinstance(data, list):
                     VIP_USERS = {uid: None for uid in data}
@@ -151,7 +151,7 @@ def _load_users():
     global ALL_USERS
     try:
         if os.path.exists(USERS_FILE):
-            with open(USERS_FILE, "r", encoding="utf-8") as f:
+            with open(USERS_FILE, "r", encoding="utf-8-sig") as f:
                 ALL_USERS = set(json.load(f))
     except Exception:
         ALL_USERS = set()
@@ -168,7 +168,7 @@ def _save_users():
 def _load_cards() -> dict:
     try:
         if os.path.exists(CARD_FILE):
-            with open(CARD_FILE, "r", encoding="utf-8") as f:
+            with open(CARD_FILE, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
                 if data:
                     return data
