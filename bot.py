@@ -1104,7 +1104,6 @@ async def _send_xchina_detail(update, url, author="", publish_date=""):
 
     keyboard = InlineKeyboardMarkup(buttons)
 
-    keyboard = InlineKeyboardMarkup(buttons)
     sent = False
     if cover_bytes:
         img_data, img_ct = cover_bytes
