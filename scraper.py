@@ -138,25 +138,55 @@ def _fix_image_url(src: str) -> Optional[str]:
     return src
 
 
+# Proxy client cache: {proxy_url: (client, last_used_timestamp)}
+_proxy_clients: dict[str, tuple[httpx.AsyncClient, float]] = {}
+_proxy_client_lock = asyncio.Lock()
+_PROXY_CLIENT_TTL = 300  # 5 min cache
+
+
+async def _get_proxy_client(proxy_url: str) -> httpx.AsyncClient:
+    """Get or create a cached proxy client."""
+    async with _proxy_client_lock:
+        now = asyncio.get_event_loop().time()
+        # Clean expired clients
+        expired = [p for p, (_, t) in _proxy_clients.items() if now - t > _PROXY_CLIENT_TTL]
+        for p in expired:
+            try:
+                await _proxy_clients[p][0].aclose()
+            except Exception:
+                pass
+            del _proxy_clients[p]
+        
+        if proxy_url in _proxy_clients:
+            client, _ = _proxy_clients[proxy_url]
+            _proxy_clients[proxy_url] = (client, now)
+            return client
+        
+        client = httpx.AsyncClient(
+            proxy=proxy_url,
+            headers=HEADERS,
+            timeout=httpx.Timeout(config.REQUEST_TIMEOUT),
+            verify=config.SSL_VERIFY,
+            limits=httpx.Limits(max_keepalive_connections=3, max_connections=5),
+        )
+        _proxy_clients[proxy_url] = (client, now)
+        return client
+
+
 async def _fetch(url: str, retries: int = 2) -> Optional[str]:
     """Async HTTP GET, returns response text."""
-    # Use proxy for 4KHD to avoid IP blocking; skip proxy for other sites
     proxy_url = get_random_proxy() if "4khd.com" in url else None
     for attempt in range(retries):
         try:
             if proxy_url:
-                # httpx<0.28 doesn't support per-request proxy; create temp client
-                async with httpx.AsyncClient(
-                    proxy=proxy_url,
-                    headers=HEADERS,
-                    timeout=httpx.Timeout(config.REQUEST_TIMEOUT),
-                    verify=config.SSL_VERIFY,
-                ) as temp_client:
-                    r = await temp_client.get(url, follow_redirects=True)
+                client = await _get_proxy_client(proxy_url)
             else:
                 client = await _get_client()
-                r = await client.get(url, follow_redirects=True)
+            r = await client.get(url, follow_redirects=True)
             if r.status_code == 200:
+                if proxy_url:
+                    from proxy_pool import report_proxy_result
+                    report_proxy_result(proxy_url, True)
                 return r.text
             if r.status_code == 429:
                 wait = int(r.headers.get("Retry-After", "10"))
@@ -171,6 +201,9 @@ async def _fetch(url: str, retries: int = 2) -> Optional[str]:
         except Exception as e:
             logger.warning(f"Request error for {url[:60]} (attempt {attempt+1}): {e}")
             await asyncio.sleep(1)
+    if proxy_url:
+        from proxy_pool import report_proxy_result
+        report_proxy_result(proxy_url, False)
     return None
 
 

@@ -15,7 +15,7 @@ PROXY_SOURCES = [
 ]
 
 REFRESH_INTERVAL = 600
-PROXY_TIMEOUT = 8.0
+PROXY_TIMEOUT = 5.0
 VALIDATE_URLS = ["https://www.4khd.com", "https://www.baidu.com"]
 
 _proxy_pool: list[str] = []
@@ -56,7 +56,7 @@ async def _validate_proxy(proxy: str) -> bool:
     return True
 
 
-async def _validate_pool(proxies: list[str], max_workers: int = 10) -> list[str]:
+async def _validate_pool(proxies: list[str], max_workers: int = 20) -> list[str]:
     sem = asyncio.Semaphore(max_workers)
 
     async def validate_one(p: str) -> Optional[str]:
@@ -65,7 +65,7 @@ async def _validate_pool(proxies: list[str], max_workers: int = 10) -> list[str]
                 return p
         return None
 
-    tasks = [validate_one(p) for p in proxies[:50]]
+    tasks = [validate_one(p) for p in proxies[:30]]
     results = await asyncio.gather(*tasks)
     return [r for r in results if r is not None]
 
