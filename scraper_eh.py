@@ -13,12 +13,13 @@ EH_BASE = "https://e-hentai.org"
 EH_SEARCH = f"{EH_BASE}/?f_cats=959&f_search={{keyword}}"
 MAX_EH_PAGES = 3
 
-EH_COOKIES = {
-    "ipb_member_id": config.EH_MEMBER_ID,
-    "ipb_pass_hash": config.EH_PASS_HASH,
-    "sk": config.EH_SK,
-    "event": config.EH_EVENT,
-}
+def _eh_cookies():
+    return {
+        "ipb_member_id": config.EH_MEMBER_ID,
+        "ipb_pass_hash": config.EH_PASS_HASH,
+        "sk": config.EH_SK,
+        "event": config.EH_EVENT,
+    }
 
 EH_HEADERS = {
     "User-Agent": config.USER_AGENT,
@@ -74,7 +75,7 @@ async def _eh_fetch(url: str, timeout: int = 30) -> Optional[str]:
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(
-                headers=EH_HEADERS, cookies=EH_COOKIES, timeout=timeout, follow_redirects=True
+                headers=EH_HEADERS, cookies=_eh_cookies(), timeout=timeout, follow_redirects=True
             ) as client:
                 r = await client.get(url)
                 if r.status_code == 200:
@@ -256,7 +257,7 @@ async def get_eh_magnet(url: str) -> Optional[str]:
     tor_dl = m_tor.group(0)
 
     try:
-        async with httpx.AsyncClient(headers=EH_HEADERS, cookies=EH_COOKIES, timeout=30) as client:
+        async with httpx.AsyncClient(headers=EH_HEADERS, cookies=_eh_cookies(), timeout=30) as client:
             r = await client.get(tor_dl)
             if r.status_code != 200:
                 return None
