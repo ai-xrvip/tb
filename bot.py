@@ -701,18 +701,21 @@ async def _handle_menu_search(update, context):
 
 
 async def _handle_random_next(update, context):
-    """???????"""
+    """换一个随机推荐"""
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("?? ????????...")
+    # Delete the old photo message, send new loading text
+    await query.message.delete()
+    msg = await update.effective_message.reply_text("🎲 正在为你随机推荐...")
     try:
         gallery = await get_random_gallery()
     except Exception:
-        await query.edit_message_text("?? ???????????????")
+        await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
         return
     if not gallery:
-        await query.edit_message_text("?? ???????????????")
+        await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
         return
+    await msg.delete()
     await _send_gallery_detail(update, gallery["url"], from_random=True)
 
 
