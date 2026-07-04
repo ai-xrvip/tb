@@ -698,6 +698,22 @@ async def _handle_menu_search(update, context):
         ]]))
 
 
+async def _handle_random_next(update, context):
+    """???????"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("?? ????????...")
+    try:
+        gallery = await get_random_gallery()
+    except Exception:
+        await query.edit_message_text("?? ???????????????")
+        return
+    if not gallery:
+        await query.edit_message_text("?? ???????????????")
+        return
+    await _send_gallery_detail(update, gallery["url"], from_random=True)
+
+
 async def _handle_menu_random(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
@@ -711,7 +727,7 @@ async def _handle_menu_random(update, context):
     if not gallery:
         await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
         return
-    await _send_gallery_detail(update, gallery["url"])
+    await _send_gallery_detail(update, gallery["url"], from_random=True)
 
 
 async def _handle_menu_vip(update, context):
@@ -762,6 +778,8 @@ async def handle_callback(update, context):
             await _handle_menu_search(update, context)
         elif data == "menu_random":
             await _handle_menu_random(update, context)
+        elif data == "random_next":
+            await _handle_random_next(update, context)
         elif data == "menu_vip":
             await _handle_menu_vip(update, context)
         elif data == "menu_home":
@@ -1084,7 +1102,7 @@ async def _send_xchina_detail(update, url):
     if not sent:
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
-async def _send_gallery_detail(update, url, gallery_data=None):
+async def _send_gallery_detail(update, url, gallery_data=None, from_random=False):
     user_id = update.effective_user.id
     logger.info("Fetching gallery: " + url[:80])
     if gallery_data is None:
