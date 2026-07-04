@@ -251,6 +251,18 @@ def _clean_title(title):
 
 
 def _is_vip(user_id):
+
+def _parse_date_for_sort(date_str):
+    """Parse date from either format (4KHD: 2026年07月03日, XC: 2026.07.03) to comparable string."""
+    if not date_str:
+        return ""
+    m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", date_str)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = re.match(r"(\d{4})[./-](\d{1,2})[./-](\d{1,2})", date_str)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return ""
     if user_id not in VIP_USERS:
         return False
     expiry = VIP_USERS[user_id]
@@ -664,8 +676,9 @@ async def _do_search(update, keyword):
         logger.error(f"XChina search error: {traceback.format_exc()}")
     
     # Combine: 4KHD first, then XChina
+    # Combine and sort by publish date (newest first)
     merged = hd_results + xc_results
-
+    merged.sort(key=lambda r: _parse_date_for_sort(r.get('publish_date', '')), reverse=True)
     try:
         await loading.delete()
     except Exception:
