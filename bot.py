@@ -255,6 +255,16 @@ def _clean_title(title):
 
 
 def _is_vip(user_id):
+    if user_id not in VIP_USERS:
+        return False
+    expiry = VIP_USERS[user_id]
+    if expiry is None:
+        return True  # permanent
+    if _now() > expiry:
+        del VIP_USERS[user_id]
+        _save_vip()
+        return False
+    return True
 
 def _parse_date_for_sort(date_str):
     """Parse date from either format (4KHD: 2026年07月03日, XC: 2026.07.03) to comparable string."""
@@ -267,16 +277,6 @@ def _parse_date_for_sort(date_str):
     if m:
         return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
     return ""
-    if user_id not in VIP_USERS:
-        return False
-    expiry = VIP_USERS[user_id]
-    if expiry is None:
-        return True  # permanent
-    if _now() > expiry:
-        del VIP_USERS[user_id]
-        _save_vip()
-        return False
-    return True
 
 
 async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"):
