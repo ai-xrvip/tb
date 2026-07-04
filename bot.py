@@ -1346,22 +1346,23 @@ def main():
 
     if config.WEBHOOK_URL:
         logger.info("Starting in webhook mode: " + config.WEBHOOK_URL)
-        async def _start_webhook():
+        # Pre-init: start app + proxy pool, then let run_webhook manage its own event loop
+        async def _pre_init():
             await app.initialize()
             await app.start()
             await start_proxy_pool()
             asyncio.create_task(_periodic_cleanup(app))
             await app.bot.set_webhook(url=config.WEBHOOK_URL + "/webhook")
-            logger.info("Webhook set.")
-            # Start HTTP server to receive webhook updates
-            await app.run_webhook(
+            logger.info("Webhook set. Starting HTTP server...")
+        asyncio.run(_pre_init())
+        # run_webhook manages its own event loop - do NOT wrap in asyncio.run()
+        try:
+            app.run_webhook(
                 listen="0.0.0.0",
                 port=config.WEBHOOK_PORT,
                 url_path="webhook",
                 webhook_url=config.WEBHOOK_URL + "/webhook",
             )
-        try:
-            asyncio.run(_start_webhook())
         except KeyboardInterrupt:
             asyncio.run(shutdown(app, "SIGINT"))
     else:
