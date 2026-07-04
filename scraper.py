@@ -140,12 +140,22 @@ def _fix_image_url(src: str) -> Optional[str]:
 
 async def _fetch(url: str, retries: int = 2) -> Optional[str]:
     """Async HTTP GET, returns response text."""
-    client = await _get_client()
     # Use proxy for 4KHD to avoid IP blocking; skip proxy for other sites
     proxy_url = get_random_proxy() if "4khd.com" in url else None
     for attempt in range(retries):
         try:
-            r = await client.get(url, follow_redirects=True, proxy=proxy_url)
+            if proxy_url:
+                # httpx<0.28 doesn't support per-request proxy; create temp client
+                async with httpx.AsyncClient(
+                    proxy=proxy_url,
+                    headers=HEADERS,
+                    timeout=httpx.Timeout(config.REQUEST_TIMEOUT),
+                    verify=config.SSL_VERIFY,
+                ) as temp_client:
+                    r = await temp_client.get(url, follow_redirects=True)
+            else:
+                client = await _get_client()
+                r = await client.get(url, follow_redirects=True)
             if r.status_code == 200:
                 return r.text
             if r.status_code == 429:
