@@ -192,14 +192,16 @@ def _save_cards(cards: dict):
         logger.error(f"Failed to save cards: {e}")
 
 
-async def _store_url(url):
-    """Store URL with timestamp and return a short key."""
+async def _store_url(url, **kwargs):
+    """Store URL with timestamp and return a short key. Extra kwargs stored as metadata."""
     global url_counter
     async with _url_counter_lock:
         url_counter += 1
         key = str(url_counter)
     async with _url_store_lock:
-        url_store[key] = {"url": url, "ts": _now()}
+        entry = {"url": url, "ts": _now()}
+        entry.update(kwargs)
+        url_store[key] = entry
         if url_counter % 1000 == 0:
             _cleanup_url_store()
     return key
@@ -818,7 +820,8 @@ async def handle_callback(update, context):
                 await query.edit_message_text("❌ 链接已过期，请重新搜索。")
                 return
             loading_msg = await query.message.reply_text("⏳ 正在获取图集详情...")
-            await _send_xchina_detail(update, url)
+            entry = url_store.get(data[2:])
+            await _send_xchina_detail(update, url, author=entry.get("author", ""), publish_date=entry.get("publish_date", ""))
             try:
                 await loading_msg.delete()
             except Exception:
@@ -1035,9 +1038,11 @@ async def _show_results_page(msg_or_query, user_id):
         display_title = f"{author} - {clean_title}" if author else clean_title
         text += f"{idx}. {source_badge} {html.escape(display_title)}\n"
         author_name = r.get("author", "")
-        display_title = f"{author_name} - {clean_title}" if author_name else clean_title
-        btn_label = display_title[:20] + ".." if len(display_title) > 22 else display_title[:22]
-        url_key = await _store_url(r["url"])
+        btn_label = author_name if author_name else clean_title
+        btn_label = btn_label[:20] + ".." if len(btn_label) > 22 else btn_label[:22]
+        author = r.get("author", "")
+        publish_date = r.get("publish_date", "")
+        url_key = await _store_url(r["url"], author=author, publish_date=publish_date)
         prefix = "x_" if r.get("source") == "xchina" else "d_"
         buttons.append([InlineKeyboardButton(f"{source_badge} {idx}. {btn_label}", callback_data=prefix + url_key)])
 
@@ -1061,7 +1066,7 @@ async def _show_results_page(msg_or_query, user_id):
 
 
 
-async def _send_xchina_detail(update, url):
+async def _send_xchina_detail(update, url, author="", publish_date=""):
     user_id = update.effective_user.id
     try:
         detail = await get_xchina_gallery(url)
@@ -1076,16 +1081,25 @@ async def _send_xchina_detail(update, url):
     count = detail.get("count", 0)
     images = detail.get("images", [])
 
+    # Use detail values, fallback to params from search results
+    final_author = detail.get("author", "") or author
+    final_date = detail.get("publish_date", "") or publish_date
+
     clean_title = _clean_title(title)
-    text = f"🌐 <b>{html.escape(clean_title)}</b>"
+    display_title = f"{final_author} - {clean_title}" if final_author else clean_title
+    text = f"\U0001f380 {html.escape(display_title)}"
     if count:
-        text += f"\n📸 {count}P"
+        text += f"\n\U0001f4f8 {count}P"
+    if final_date:
+        text += f"\n\U0001f550 {final_date}"
 
     url_key = await _store_url(url)
     buttons = []
     if images:
-        buttons.append([InlineKeyboardButton("🖼 查看完整图集", callback_data="f_" + url_key)])
-    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
+        buttons.append([InlineKeyboardButton("\U0001f5bc\ufe0f \u67e5\u770b\u5b8c\u6574\u56fe\u96c6", callback_data="f_" + url_key)])
+    buttons.append([InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")])
+
+    keyboard = InlineKeyboardMarkup(buttons)
 
     keyboard = InlineKeyboardMarkup(buttons)
     sent = False
@@ -1163,7 +1177,7 @@ async def _send_gallery_full(update, url):
         if gid:
             gallery_id = gid.group(1)
             max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
-            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
+            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i}_600x0.webp" for i in range(1, max_imgs + 1)]
         else:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
             return
@@ -1224,7 +1238,7 @@ async def _send_gallery_page(update, url, page=0):
         if gid:
             gallery_id = gid.group(1)
             max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
-            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
+            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i}_600x0.webp" for i in range(1, max_imgs + 1)]
         else:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
             return
