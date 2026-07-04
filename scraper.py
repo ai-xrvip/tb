@@ -239,7 +239,7 @@ async def search_galleries(keyword: str, max_results: int = None, max_pages: int
     if not text:
         return []
 
-    soup = BeautifulSoup(text, "html.parser")
+    soup = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, text, "html.parser")
 
     # Collect pagination links from the first page
     search_pages = [search_url]
@@ -261,7 +261,7 @@ async def search_galleries(keyword: str, max_results: int = None, max_pages: int
             sp_text = await _fetch(sp_url)
             if not sp_text:
                 continue
-            soup = BeautifulSoup(sp_text, "html.parser")
+            soup = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, sp_text, "html.parser")
             await asyncio.sleep(0.3)
 
         for article in soup.select("article, .post, .entry"):
@@ -324,7 +324,7 @@ async def get_gallery_images(post_url: str, max_pages: int = None, max_images: i
     if not text:
         return {"title": "", "images": [], "cover": None, "cover_bytes": None, "publish_date": ""}
 
-    soup = BeautifulSoup(text, "html.parser")
+    soup = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, text, "html.parser")
     title = soup.find("title")
     title_text = title.text.strip() if title else "Unknown"
     title_text = re.sub(r"\s*[-|]\s*4KHD\s*$", "", title_text).strip()
@@ -349,7 +349,7 @@ async def get_gallery_images(post_url: str, max_pages: int = None, max_images: i
             page_text = await _fetch(page_url)
             if not page_text:
                 continue
-            soup = BeautifulSoup(page_text, "html.parser")
+            soup = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, page_text, "html.parser")
 
         content = None
         for sel in ["article", ".entry-content", ".post-body", ".single-content", "main"]:
@@ -363,7 +363,7 @@ async def get_gallery_images(post_url: str, max_pages: int = None, max_images: i
 
         for ns in content.find_all("noscript"):
             if ns.text:
-                inner = BeautifulSoup(ns.text, "html.parser")
+                inner = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, ns.text, "html.parser")
                 for img in inner.find_all("img"):
                     src = _fix_image_url(img.get("src"))
                     if src and "4khd.com" in src and src not in seen:
@@ -412,7 +412,7 @@ async def extract_download_link(post_url: str) -> str:
     if not text:
         return ""
 
-    soup = BeautifulSoup(text, "html.parser")
+    soup = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, text, "html.parser")
     content_area = soup.select_one("article, .entry-content, .post-body, .single-content, main") or soup
 
     for a in content_area.find_all("a", href=True):
@@ -542,7 +542,7 @@ async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 
         if not text:
             continue
 
-        soup = BeautifulSoup(text, "html.parser")
+        soup = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, text, "html.parser")
         items = soup.select(".item.photo")
         if not items:
             break
@@ -622,7 +622,7 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
     if not text:
         return result
 
-    soup = BeautifulSoup(text, "html.parser")
+    soup = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, text, "html.parser")
 
     # Title
     h1 = soup.find("h1")

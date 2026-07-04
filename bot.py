@@ -77,9 +77,12 @@ _url_counter_lock = asyncio.Lock()
 
 # Per-user rate limiting: {user_id: [timestamp, ...]}
 _user_search_times: dict = defaultdict(list)
-_user_search_lock = Lock()
+_user_search_lock = asyncio.Lock()
 
 ADMIN_IDS = config.ADMIN_IDS
+
+# Semaphore to limit concurrent image downloads (prevents resource exhaustion)
+_download_sem = asyncio.Semaphore(5)
 
 MENU_KEYBOARD = ReplyKeyboardMarkup([
     [KeyboardButton("🔍 搜索"), KeyboardButton("🎲 推荐"), KeyboardButton("👑 VIP"), KeyboardButton("👤 我的")],
@@ -212,11 +215,11 @@ def _get_url(key):
     return entry["url"]
 
 
-def _check_rate_limit(user_id: int) -> bool:
+async def _check_rate_limit(user_id: int) -> bool:
     """Check if user has exceeded the rate limit. Returns True if allowed."""
     now = _now()
     cutoff = now - RATE_LIMIT_WINDOW
-    with _user_search_lock:
+    async with _user_search_lock:
         times = _user_search_times[user_id]
         # Remove old entries
         _user_search_times[user_id] = [t for t in times if t > cutoff]
@@ -559,7 +562,7 @@ async def handle_text(update, context):
         user_waiting_card.discard(user_id)
 
         # Rate limit card activation attempts (prevent brute force)
-        if not _is_vip(user_id) and not _check_rate_limit(user_id):
+        if not _is_vip(user_id) and not await _check_rate_limit(user_id):
             await update.message.reply_text(
                 "⏱ 操作太频繁，请稍后再试。"
             )
@@ -632,7 +635,7 @@ async def _do_search(update, keyword):
 
     # Rate limit check
     user_id = update.effective_user.id
-    if not _is_vip(user_id) and not _check_rate_limit(user_id):
+    if not _is_vip(user_id) and not await _check_rate_limit(user_id):
         await loading.delete()
         await msg.reply_text(
             "⏱ 搜索太频繁了，请稍后再试～",
@@ -1155,8 +1158,14 @@ async def _send_gallery_full(update, url):
     preview = all_images[:10]
     media = []
     downloaded = 0
-    for img_url in preview:
-        result = await download_image(img_url, referer=url)
+    
+    async def _dl_one(img_url):
+        async with _download_sem:
+            return await download_image(img_url, referer=url)
+    
+    tasks = [_dl_one(u) for u in preview]
+    results_list = await asyncio.gather(*tasks)
+    for result in results_list:
         if result:
             img_data, ct = result
             img_data.seek(0)
@@ -1213,8 +1222,14 @@ async def _send_gallery_page(update, url, page=0):
         return
     media = []
     downloaded = 0
-    for img_url in page_images:
-        result = await download_image(img_url, referer=url)
+    
+    async def _dl_one(img_url):
+        async with _download_sem:
+            return await download_image(img_url, referer=url)
+    
+    tasks = [_dl_one(u) for u in preview]
+    results_list = await asyncio.gather(*tasks)
+    for result in results_list:
         if result:
             img_data, ct = result
             img_data.seek(0)
