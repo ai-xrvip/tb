@@ -32,6 +32,10 @@ from scraper import (
     search_xchina, get_xchina_gallery,
 )
 from proxy_pool import start_proxy_pool, stop_proxy_pool
+from scraper_eh import (
+    search_ehentai, get_eh_gallery, get_eh_magnet,
+)
+EH_ENABLED = bool(config.EH_MEMBER_ID and config.EH_PASS_HASH)
 
 # ---- Logging ----
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -660,9 +664,10 @@ async def _do_search(update, keyword):
         )
         return
 
-    # Search both sources in parallel
+    # Search all sources in parallel
     hd_task = asyncio.create_task(search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS))
     xc_task = asyncio.create_task(search_xchina(keyword, max_results=config.MAX_SEARCH_RESULTS))
+    eh_task = asyncio.create_task(search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS)) if EH_ENABLED else None
     
     hd_results = []
     xc_results = []
@@ -676,8 +681,15 @@ async def _do_search(update, keyword):
         logger.error(f"XChina search error: {traceback.format_exc()}")
     
     # Combine: 4KHD first, then XChina
+    eh_results = []
+    if eh_task:
+        try:
+            eh_results = await eh_task
+        except Exception as e:
+            logger.error(f"EH search error: {traceback.format_exc()}")
+
     # Combine and sort by publish date (newest first)
-    merged = hd_results + xc_results
+    merged = hd_results + xc_results + eh_results
     merged.sort(key=lambda r: _parse_date_for_sort(r.get('publish_date', '')), reverse=True)
     try:
         await loading.delete()
@@ -842,6 +854,36 @@ async def handle_callback(update, context):
                 await loading_msg.delete()
             except Exception:
                 pass
+        elif data.startswith("e_"):
+            url = _get_url(data[2:])
+            if not url:
+                await query.edit_message_text("❌ 链接已过期")
+                return
+            loading_msg = await query.message.reply_text("⏳ 正在获取EH图集...")
+            await _send_eh_detail(update, url)
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
+        elif data.startswith("m_"):
+            url = _get_url(data[2:])
+            if not url:
+                await query.answer("❌ 链接已过期", show_alert=True)
+                return
+            if not _is_vip(user_id):
+                await query.answer("👑 请先开通VIP会员", show_alert=True)
+                return
+            await query.answer()
+            loading_msg = await query.message.reply_text("🧲 正在获取磁力链接...")
+            magnet = await get_eh_magnet(url)
+            await loading_msg.delete()
+            if magnet:
+                await query.message.reply_text(
+                    f"🧲 <b>磁力链接</b>\n\n<code>{magnet}</code>",
+                    parse_mode="HTML"
+                )
+            else:
+                await query.message.reply_text("❌ 该图集暂无磁力链接")
         elif data.startswith("f_"):
             url = _get_url(data[2:])
             if not url:
@@ -1059,7 +1101,7 @@ async def _show_results_page(msg_or_query, user_id):
         author = r.get("author", "")
         publish_date = r.get("publish_date", "")
         url_key = await _store_url(r["url"], author=author, publish_date=publish_date)
-        prefix = "x_" if r.get("source") == "xchina" else "d_"
+        prefix = "e_" if r.get("source") == "ehentai" else ("x_" if r.get("source") == "xchina" else "d_")
         buttons.append([InlineKeyboardButton(f"{source_badge} {idx}. {btn_label}", callback_data=prefix + url_key)])
 
     # Pagination buttons — limited by accessible pages, not full_pages
@@ -1135,6 +1177,45 @@ async def _send_xchina_detail(update, url, author="", publish_date=""):
     if not sent:
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
+async def _send_eh_detail(update, url):
+    user_id = update.effective_user.id
+    try:
+        detail = await get_eh_gallery(url)
+    except Exception:
+        logger.error("EH detail error: " + traceback.format_exc())
+        await update.effective_message.reply_text("❌ 获取EH图集失败")
+        return
+
+    title = detail.get("title", "Unknown")
+    cover = detail.get("cover")
+    images = detail.get("images", [])
+    count = detail.get("count", 0)
+    tags = detail.get("tags", [])
+
+    clean_title = _clean_title(title)
+    text = f"📖 {html.escape(clean_title)}"
+    if count:
+        text += f"\n📸 {count}P"
+    if tags:
+        text += "\n🏷 " + ", ".join(tags[:8])
+
+    url_key = await _store_url(url)
+    buttons = []
+    if images:
+        buttons.append([InlineKeyboardButton("🖼️ 查看图集预览", callback_data="f_" + url_key)])
+    if _is_vip(user_id):
+        buttons.append([InlineKeyboardButton("🧲 获取磁力链", callback_data="m_" + url_key)])
+    buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    if cover:
+        try:
+            await update.effective_message.reply_photo(photo=cover, caption=text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception:
+            await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+
 async def _send_gallery_detail(update, url, gallery_data=None, from_random=False):
     user_id = update.effective_user.id
     logger.info("Fetching gallery: " + url[:80])
@@ -1185,9 +1266,19 @@ async def _send_gallery_detail(update, url, gallery_data=None, from_random=False
 async def _send_gallery_full(update, url):
     user_id = update.effective_user.id
     
-    # Detect source: xchina URLs contain /photo/id-
+    # Detect source
+    is_ehentai = "e-hentai.org" in url
     is_xchina = "/photo/id-" in url
-    if is_xchina:
+    if is_ehentai:
+        try:
+            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            eh_data = await get_eh_gallery(url, max_images=max_imgs)
+        except Exception:
+            logger.error("EH full gallery error: " + traceback.format_exc())
+            await update.effective_message.reply_text("❌ 加载EH图集失败")
+            return
+        all_images = eh_data["images"]
+    elif is_xchina:
         # Use sequential URL pattern for xchina
         import re as _re
         gid = _re.search(r"/id-([a-f0-9]+)", url)
@@ -1247,9 +1338,18 @@ async def _send_gallery_page(update, url, page=0):
     if not _is_vip(user_id):
         return
     
-    # Detect xchina URLs
+    # Detect source
+    is_ehentai = "e-hentai.org" in url
     is_xchina = "/photo/id-" in url
-    if is_xchina:
+    if is_ehentai:
+        try:
+            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            eh_data = await get_eh_gallery(url, max_images=max_imgs)
+        except Exception:
+            await update.effective_message.reply_text("❌ 加载EH图集失败")
+            return
+        all_images = eh_data["images"]
+    elif is_xchina:
         import re as _re
         gid = _re.search(r"/id-([a-f0-9]+)", url)
         if gid:

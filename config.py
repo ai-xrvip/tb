@@ -43,6 +43,12 @@ class Config:
     # Rate limiting
     MAX_SEARCHES_PER_MINUTE: int = int(os.getenv("MAX_SEARCHES_PER_MINUTE", "10"))
 
+    # E-Hentai cookies
+    EH_MEMBER_ID: str = os.getenv("EH_MEMBER_ID", "")
+    EH_PASS_HASH: str = os.getenv("EH_PASS_HASH", "")
+    EH_SK: str = os.getenv("EH_SK", "")
+    EH_EVENT: str = os.getenv("EH_EVENT", "")
+
     # Admin IDs (comma-separated)
     ADMIN_IDS: set[int] = {
         int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()
