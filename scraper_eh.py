@@ -10,7 +10,7 @@ from config import config
 logger = logging.getLogger(__name__)
 
 EH_BASE = "https://e-hentai.org"
-EH_SEARCH = f"{EH_BASE}/?f_cats=959&f_search={{keyword}}"
+EH_SEARCH = f"{EH_BASE}/?f_cosplay=1&f_search={{keyword}}"
 MAX_EH_PAGES = 3
 
 def _eh_cookies():
@@ -19,6 +19,7 @@ def _eh_cookies():
         "ipb_pass_hash": config.EH_PASS_HASH,
         "sk": config.EH_SK,
         "event": config.EH_EVENT,
+        "iq": config.EH_IQ,
     }
 
 EH_HEADERS = {
@@ -103,7 +104,7 @@ async def search_ehentai(keyword: str, max_results: int = 20, max_pages: int = M
 
         soup = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, text, "html.parser")
 
-        for row in soup.select("tr.gtr0, tr.gtr1"):
+        for row in soup.select(".gld > div"):
             a_tag = row.select_one("a[href*='/g/']")
             if not a_tag:
                 continue
@@ -147,7 +148,7 @@ async def search_ehentai(keyword: str, max_results: int = 20, max_pages: int = M
             if len(results) >= max_results:
                 return results
 
-        if not soup.select("tr.gtr0, tr.gtr1"):
+        if not soup.select(".gld > div"):
             break
         await asyncio.sleep(1)
 

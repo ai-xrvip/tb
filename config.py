@@ -48,6 +48,7 @@ class Config:
     EH_PASS_HASH: str = os.getenv("EH_PASS_HASH", "")
     EH_SK: str = os.getenv("EH_SK", "")
     EH_EVENT: str = os.getenv("EH_EVENT", "")
+    EH_IQ: str = os.getenv("EH_IQ", "")
 
     # Admin IDs (comma-separated)
     ADMIN_IDS: set[int] = {
