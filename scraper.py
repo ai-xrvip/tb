@@ -642,6 +642,20 @@ async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 
             item_text = item.get_text(" ", strip=True)
             publish_date = _extract_xc_date(item_text)
 
+            # Extract author/studio from short text divs (exclude date, title, count)
+            author = ""
+            for div in item.select("div"):
+                txt = div.text.strip()
+                # Author is typically a short name (< 20 chars), not a number, not the title
+                if txt and len(txt) < 20 and txt != title[:len(txt)] and not txt.startswith("20"):
+                    # Skip count patterns like "155P"
+                    if re.search(r"^\d+P", txt):
+                        continue
+                    # If we find a short text that looks like a name/studio (Chinese/English)
+                    if re.search(r"[一-鿿]|[a-zA-Z]", txt):
+                        author = txt
+                        break
+
             all_results.append({
                 "title": title,
                 "url": href,
@@ -649,6 +663,7 @@ async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 
                 "count": count_str,
                 "source": "xchina",
                 "publish_date": publish_date,
+                "author": author,
             })
 
             if len(all_results) >= max_results:
@@ -696,6 +711,14 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
         result["title"] = h1.text.strip()
     # Extract date from page text
     result["publish_date"] = _extract_xc_date(text)
+    # Try to find author/studio
+    result["author"] = ""
+    for div in soup.select("div"):
+        txt = div.text.strip()
+        if txt and len(txt) < 20 and txt != result["title"][:len(txt)] and re.search(r"[一-鿿]|[a-zA-Z]", txt):
+            if not txt.startswith("20") and not re.search(r"^\d+P", txt):
+                result["author"] = txt
+                break
 
     # Extract all image URLs from background-image styles
     import re as re_mod

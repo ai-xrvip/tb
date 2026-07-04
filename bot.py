@@ -1031,7 +1031,9 @@ async def _show_results_page(msg_or_query, user_id):
         idx = start + i + 1
         clean_title = _clean_title(r["title"])
         source_badge = "📷"
-        text += f"{idx}. {source_badge} {html.escape(clean_title)}\n"
+        author = r.get("author", "")
+        display_title = f"{author} - {clean_title}" if author else clean_title
+        text += f"{idx}. {source_badge} {html.escape(display_title)}\n"
         btn_label = clean_title[:20] + ".." if len(clean_title) > 22 else clean_title[:22]
         url_key = await _store_url(r["url"])
         prefix = "x_" if r.get("source") == "xchina" else "d_"
