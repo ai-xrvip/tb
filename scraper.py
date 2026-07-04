@@ -9,6 +9,7 @@ from io import BytesIO
 from typing import Optional, Any
 from datetime import datetime
 import httpx
+from curl_cffi import requests as curl_req
 from bs4 import BeautifulSoup
 from config import config
 from proxy_pool import get_random_proxy
@@ -489,11 +490,16 @@ XC_HEADERS = {
 
 
 async def _xc_fetch(url: str, retries: int = 2) -> str | None:
-    """Fetch xchina.co page with browser-like headers."""
-    client = await _get_client()
+    """Fetch xchina.co page with curl_cffi to bypass Cloudflare."""
     for attempt in range(retries):
         try:
-            r = await client.get(url, headers=XC_HEADERS, follow_redirects=True)
+            r = await asyncio.to_thread(
+                curl_req.get,
+                url,
+                headers=XC_HEADERS,
+                impersonate="chrome124",
+                timeout=15,
+            )
             if r.status_code == 200:
                 return r.text
             logger.warning(f"XC HTTP {r.status_code} for {url[:60]} (attempt {attempt+1})")
