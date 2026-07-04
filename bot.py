@@ -1306,7 +1306,7 @@ def main():
         ])
         logger.info("Bot commands set")
 
-    app = Application.builder().token(config.BOT_TOKEN).post_init(_setup_commands).build()
+    app = Application.builder().token(config.BOT_TOKEN).post_init(_setup_commands).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("search", cmd_search))
