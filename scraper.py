@@ -723,6 +723,14 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
     # Extract all image URLs from background-image styles
     import re as re_mod
     img_urls = re_mod.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+_600x0\.webp", text)
+    if not img_urls:
+        img_urls = re_mod.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+\.webp", text)
+        if img_urls:
+            img_urls = [u.replace(".webp", "_600x0.webp") if "_600x0" not in u else u for u in img_urls]
+    if not img_urls:
+        img_urls = re_mod.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+\.webp", text)
+        if img_urls:
+            img_urls = [u.replace(".webp", "_600x0.webp") if "_600x0" not in u else u for u in img_urls]
     seen = set()
     images = []
     for u in img_urls:
@@ -732,9 +740,9 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
 
     # If no images found from HTML, generate from pattern
     if not images and gallery_id:
-        # Try up to 20 images by pattern
+        # Try without leading zeros first (common format)
         for i in range(1, min(max_images + 1, 21)):
-            images.append(f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp")
+            images.append(f"https://img.xchina.io/photos/{gallery_id}/{i}_600x0.webp")
 
     result["images"] = images[:max_images]
 

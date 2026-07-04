@@ -1034,7 +1034,9 @@ async def _show_results_page(msg_or_query, user_id):
         author = r.get("author", "")
         display_title = f"{author} - {clean_title}" if author else clean_title
         text += f"{idx}. {source_badge} {html.escape(display_title)}\n"
-        btn_label = clean_title[:20] + ".." if len(clean_title) > 22 else clean_title[:22]
+        author_name = r.get("author", "")
+        display_title = f"{author_name} - {clean_title}" if author_name else clean_title
+        btn_label = display_title[:20] + ".." if len(display_title) > 22 else display_title[:22]
         url_key = await _store_url(r["url"])
         prefix = "x_" if r.get("source") == "xchina" else "d_"
         buttons.append([InlineKeyboardButton(f"{source_badge} {idx}. {btn_label}", callback_data=prefix + url_key)])
