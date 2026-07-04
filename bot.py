@@ -1144,6 +1144,9 @@ async def _send_gallery_detail(update, url, gallery_data=None, from_random=False
         text += f"\n🕐 {publish_date}"
     url_key = await _store_url(url)
     buttons = [[InlineKeyboardButton("🖼️ 查看完整图集", callback_data="f_" + url_key)]]
+    buttons = [[InlineKeyboardButton("🖼️ 查看完整图集", callback_data="f_" + url_key)]]
+    if from_random:
+        buttons.append([InlineKeyboardButton("\U0001f504 \u6362\u4e00\u4e2a", callback_data="random_next")])
     buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
     sent = False
