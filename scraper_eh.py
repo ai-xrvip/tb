@@ -5,7 +5,7 @@ from typing import Optional
 from bs4 import BeautifulSoup
 import httpx
 
-import config
+from config import config
 
 logger = logging.getLogger(__name__)
 
