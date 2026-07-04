@@ -31,6 +31,7 @@ from scraper import (
     download_image, track_click,
     search_xchina, get_xchina_gallery,
 )
+from proxy_pool import start_proxy_pool, stop_proxy_pool
 
 # ---- Logging ----
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -1273,6 +1274,7 @@ async def shutdown(app, signal_str=None):
     else:
         logger.info("Shutting down...")
     try:
+        await stop_proxy_pool()
         await app.stop()
         await app.shutdown()
     except Exception:
@@ -1347,6 +1349,7 @@ def main():
         async def _start_webhook():
             await app.initialize()
             await app.start()
+            await start_proxy_pool()
             asyncio.create_task(_periodic_cleanup(app))
             await app.bot.set_webhook(url=config.WEBHOOK_URL + "/webhook")
             logger.info("Webhook set.")
@@ -1364,7 +1367,21 @@ def main():
             asyncio.run(shutdown(app, "SIGINT"))
     else:
         logger.info("Starting in polling mode")
-        app.run_polling(allowed_updates=["message", "callback_query"])
+        async def _start_polling():
+            await app.initialize()
+            await app.start()
+            await start_proxy_pool()
+            asyncio.create_task(_periodic_cleanup(app))
+            await app.updater.start_polling(allowed_updates=["message", "callback_query"])
+            try:
+                while True:
+                    await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                await shutdown(app)
+        try:
+            asyncio.run(_start_polling())
+        except KeyboardInterrupt:
+            asyncio.run(shutdown(app, "SIGINT"))
 
 
 if __name__ == "__main__":

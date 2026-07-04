@@ -11,6 +11,7 @@ from datetime import datetime
 import httpx
 from bs4 import BeautifulSoup
 from config import config
+from proxy_pool import get_random_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -139,9 +140,11 @@ def _fix_image_url(src: str) -> Optional[str]:
 async def _fetch(url: str, retries: int = 2) -> Optional[str]:
     """Async HTTP GET, returns response text."""
     client = await _get_client()
+    # Use proxy for 4KHD to avoid IP blocking; skip proxy for other sites
+    proxy_url = get_random_proxy() if "4khd.com" in url else None
     for attempt in range(retries):
         try:
-            r = await client.get(url, follow_redirects=True)
+            r = await client.get(url, follow_redirects=True, proxy=proxy_url)
             if r.status_code == 200:
                 return r.text
             if r.status_code == 429:
