@@ -339,13 +339,18 @@ async def cmd_setvip(update, context):
     if user_id not in ADMIN_IDS:
         return
     if not context.args:
-        await update.message.reply_text("用法: /setvip <用户ID>")
+        await update.message.reply_text("用法: /setvip <用户ID> [天数]\n例如: /setvip 123456 30")
         return
     try:
         target = int(context.args[0])
-        VIP_USERS[target] = None  # permanent
+        days = int(context.args[1]) if len(context.args) > 1 else 0
+        if days > 0:
+            VIP_USERS[target] = _now() + days * 86400
+            await update.message.reply_text(f"✅ 已将用户 {target} 设为VIP（{days}天）")
+        else:
+            VIP_USERS[target] = None
+            await update.message.reply_text(f"✅ 已将用户 {target} 设为永久VIP")
         _save_vip()
-        await update.message.reply_text(f"✅ 已将用户 {target} 设为VIP")
         logger.info(f"VIP added: {target}")
     except ValueError:
         await update.message.reply_text("用户ID必须是数字")
@@ -359,9 +364,14 @@ async def cmd_admin(update, context):
     if args and args[0] == "setvip" and len(args) > 1:
         try:
             target = int(args[1])
-            VIP_USERS[target] = None
+            days = int(args[2]) if len(args) > 2 else 0
+            if days > 0:
+                VIP_USERS[target] = _now() + days * 86400
+                await update.message.reply_text(f"✅ 已将用户 {target} 设为VIP（{days}天）")
+            else:
+                VIP_USERS[target] = None
+                await update.message.reply_text(f"✅ 已将用户 {target} 设为永久VIP")
             _save_vip()
-            await update.message.reply_text(f"✅ 已将用户 {target} 设为VIP")
         except ValueError:
             await update.message.reply_text("用户ID必须是数字")
         return
@@ -530,14 +540,21 @@ async def handle_text(update, context):
     if user_id in admin_setvip_state and user_id in ADMIN_IDS:
         del admin_setvip_state[user_id]
         try:
-            target_id = int(text)
-            VIP_USERS[target_id] = None
+            parts = text.split()
+            target_id = int(parts[0])
+            days = int(parts[1]) if len(parts) > 1 else 0
+            if days > 0:
+                VIP_USERS[target_id] = _now() + days * 86400
+                label = f"{days}天"
+            else:
+                VIP_USERS[target_id] = None
+                label = "永久"
             _save_vip()
             if target_id not in ALL_USERS:
                 ALL_USERS.add(target_id)
                 _save_users()
             await update.message.reply_text(
-                f"✅ 已将用户 <code>{target_id}</code> 设置为VIP永久会员",
+                f"✅ 已将用户 <code>{target_id}</code> 设置为VIP（{label}）",
                 parse_mode="HTML"
             )
         except ValueError:
@@ -1017,7 +1034,7 @@ async def handle_callback(update, context):
                 return
             admin_setvip_state[user_id] = True
             await query.edit_message_text(
-                "✅ 请输入要设置为VIP的用户ID：\n\n例如直接发送: 123456789",
+                "✅ 请输入要设置为VIP的用户ID：\n\n格式: <用户ID> [天数]\n例如: 123456789 30\n不写天数则为永久",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("❌ 取消", callback_data="admin_back")
                 ]])
@@ -1542,6 +1559,23 @@ def main():
             asyncio.run(shutdown(app, "SIGINT"))
     else:
         logger.info("Starting in polling mode")
+        # Minimal HTTP health server so Railway doesn't kill idle service
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        class HealthHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"OK")
+            def log_message(self, format, *args):
+                pass
+        port = int(os.environ.get("PORT", 8000))
+        health_srv = HTTPServer(("0.0.0.0", port), HealthHandler)
+        import threading
+        t = threading.Thread(target=health_srv.serve_forever, daemon=True)
+        t.start()
+        logger.info(f"Health server on port {port}")
+
         async def _start_polling():
             await app.initialize()
             await app.start()

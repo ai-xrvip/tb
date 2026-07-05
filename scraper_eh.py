@@ -1,5 +1,5 @@
 """E-Hentai scraper: search, gallery images, magnet links."""
-import asyncio, hashlib, logging, re, time
+import asyncio, hashlib, logging, re, time, random
 from io import BytesIO
 from typing import Optional
 from bs4 import BeautifulSoup
@@ -71,8 +71,12 @@ def _get_name(torrent_data: bytes) -> str:
     return name.decode("utf-8", errors="replace")
 
 
+_eh_sem = asyncio.Semaphore(2)
+
 async def _eh_fetch(url: str, timeout: int = 30) -> Optional[str]:
     """Fetch E-Hentai page with cookies."""
+    async with _eh_sem:
+        await asyncio.sleep(random.uniform(0.5, 1.5))
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(

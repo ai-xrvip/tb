@@ -532,8 +532,12 @@ XC_HEADERS = {
 }
 
 
+_xc_sem = asyncio.Semaphore(2)
+
 async def _xc_fetch(url: str, retries: int = 2) -> str | None:
     """Fetch xchina.co page with curl_cffi to bypass Cloudflare."""
+    async with _xc_sem:
+        await asyncio.sleep(random.uniform(0.5, 1.5))
     for attempt in range(retries):
         try:
             r = await asyncio.to_thread(
