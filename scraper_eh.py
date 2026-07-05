@@ -10,7 +10,7 @@ from config import config
 logger = logging.getLogger(__name__)
 
 EH_BASE = "https://e-hentai.org"
-EH_SEARCH = f"{EH_BASE}/?f_cosplay=1&f_search={{keyword}}"
+EH_SEARCH = f"{EH_BASE}/?f_cats=959&f_search={{keyword}}"
 MAX_EH_PAGES = 3
 
 def _eh_cookies():
