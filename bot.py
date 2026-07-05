@@ -88,7 +88,7 @@ _user_search_lock = asyncio.Lock()
 ADMIN_IDS = config.ADMIN_IDS
 
 # Semaphore to limit concurrent image downloads (prevents resource exhaustion)
-_download_sem = asyncio.Semaphore(20)
+_download_sem = asyncio.Semaphore(12)
 
 MENU_KEYBOARD = ReplyKeyboardMarkup([
     [KeyboardButton("🔍 搜索"), KeyboardButton("🎲 推荐"), KeyboardButton("👑 VIP"), KeyboardButton("👤 我的")],
@@ -216,9 +216,8 @@ def _get_url(key):
     entry = url_store.get(key)
     if not entry:
         return ""
-    # Check TTL
+    # Check TTL -- cleanup delegated to _cleanup_url_store (periodic)
     if _now() - entry.get("ts", 0) > URL_TTL:
-        del url_store[key]
         return ""
     return entry["url"]
 
@@ -1089,12 +1088,9 @@ async def _show_results_page(msg_or_query, user_id):
     keyword = state["keyword"]
     total = len(results)
 
-    # FIX: Consistent page count for display
     full_pages = max(1, (total + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE)
     is_vip = _is_vip(user_id)
-    # Non-VIP sees only first 2 pages, VIP sees all
     max_accessible_pages = full_pages if is_vip else min(full_pages, 2)
-    accessible_total = min(total, max_accessible_pages * RESULTS_PER_PAGE)
 
     start = page * RESULTS_PER_PAGE
     end = min(start + RESULTS_PER_PAGE, total)
@@ -1214,6 +1210,13 @@ async def _send_eh_detail(update, url):
     text = f"📖 {html.escape(clean_title)}"
     if count:
         text += f"\n📸 {count}P"
+    # Show publish_date from stored search metadata
+    for v in url_store.values():
+        if v.get("url") == url:
+            pd = v.get("publish_date", "")
+            if pd:
+                text += f"\n🕐 {pd}"
+                break
     if tags:
         text += "\n🏷 " + ", ".join(tags[:8])
 
@@ -1279,8 +1282,7 @@ async def _send_gallery_detail(update, url, gallery_data=None, from_random=False
         text += f"\n🕐 {publish_date}"
     url_key = await _store_url(url)
     buttons = [[InlineKeyboardButton("🖼️ 查看完整图集", callback_data="f_" + url_key)]]
-    if from_random:
-        buttons.append([InlineKeyboardButton("\U0001f504 \u6362\u4e00\u4e2a", callback_data="random_next")])
+    buttons.append([InlineKeyboardButton("\U0001f504 \u6362\u4e00\u4e2a", callback_data="random_next")])
     buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
     sent = False
@@ -1310,7 +1312,7 @@ async def _send_gallery_full(update, url):
     is_xchina = "/photo/id-" in url
     if is_ehentai:
         try:
-            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 999 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
             eh_data = await get_eh_gallery(url, max_images=max_imgs)
         except Exception:
             logger.error("EH full gallery error: " + traceback.format_exc())
@@ -1318,19 +1320,25 @@ async def _send_gallery_full(update, url):
             return
         all_images = eh_data["images"]
     elif is_xchina:
-        # Use sequential URL pattern for xchina
-        import re as _re
-        gid = _re.search(r"/id-([a-f0-9]+)", url)
-        if gid:
-            gallery_id = gid.group(1)
-            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
-            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
-        else:
-            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
-            return
+        # Get real images from gallery HTML first
+        try:
+            xc_data = await get_xchina_gallery(url, max_images=999)
+            all_images = xc_data.get("images", [])
+            if not all_images:
+                raise ValueError("No images from HTML")
+        except Exception:
+            logger.warning("XC full: fallback to URL pattern")
+            import re as _re
+            gid = _re.search(r"/id-([a-f0-9]+)", url)
+            if gid:
+                gallery_id = gid.group(1)
+                all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, 31)]
+            else:
+                await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+                return
     else:
         try:
-            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 999 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
             gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
         except Exception:
             logger.error("Full gallery error: " + traceback.format_exc())
@@ -1382,25 +1390,31 @@ async def _send_gallery_page(update, url, page=0):
     is_xchina = "/photo/id-" in url
     if is_ehentai:
         try:
-            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 999 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
             eh_data = await get_eh_gallery(url, max_images=max_imgs)
         except Exception:
             await update.effective_message.reply_text("❌ 加载EH图集失败")
             return
         all_images = eh_data["images"]
     elif is_xchina:
-        import re as _re
-        gid = _re.search(r"/id-([a-f0-9]+)", url)
-        if gid:
-            gallery_id = gid.group(1)
-            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
-            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
-        else:
-            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
-            return
+        try:
+            xc_data = await get_xchina_gallery(url, max_images=999)
+            all_images = xc_data.get("images", [])
+            if not all_images:
+                raise ValueError("No images from HTML")
+        except Exception:
+            logger.warning("XC page: fallback to URL pattern")
+            import re as _re
+            gid = _re.search(r"/id-([a-f0-9]+)", url)
+            if gid:
+                gallery_id = gid.group(1)
+                all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, 31)]
+            else:
+                await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+                return
     else:
         try:
-            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 999 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
             gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
         except Exception:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
