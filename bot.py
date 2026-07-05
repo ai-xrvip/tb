@@ -1213,7 +1213,7 @@ async def _send_eh_detail(update, url):
     cover_bytes = None
     if cover:
         try:
-            async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://e-hentai.org/"}) as cl:
+            async with httpx.AsyncClient(timeout=20, verify=False, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://e-hentai.org/"}) as cl:
                 cr = await cl.get(cover)
                 if cr.status_code == 200 and len(cr.content) > 1000:
                     cover_bytes = cr.content
