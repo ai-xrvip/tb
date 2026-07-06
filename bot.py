@@ -1,4 +1,4 @@
-﻿"""Gallery Search Bot - Telegram Bot (async)"""
+"""Gallery Search Bot - Telegram Bot (async)"""
 import asyncio
 # Version: async-httpx-v2
 import httpx
@@ -785,7 +785,10 @@ async def _handle_random_next(update, context):
         await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
         return
     await msg.delete()
-    await _route_random_gallery(update, gallery)﻿"""Gallery Search Bot - Telegram Bot (async)"""
+    await _route_random_gallery(update, gallery)
+
+
+"""Gallery Search Bot - Telegram Bot (async)"""
 import asyncio
 # Version: async-httpx-v2
 import httpx
@@ -1577,7 +1580,7 @@ async def _handle_menu_random(update, context):
         await query.edit_message_text("😔 暂无推荐，请稍后再试～",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
-            ]]))﻿"""Gallery Search Bot - Telegram Bot (async)"""
+            ]]))"""Gallery Search Bot - Telegram Bot (async)"""
 import asyncio
 # Version: async-httpx-v2
 import httpx
@@ -2350,7 +2353,7 @@ async def _handle_random_next(update, context):
         await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
         return
     await msg.delete()
-    await _route_random_gallery(update, gallery)﻿"""Gallery Search Bot - Telegram Bot (async)"""
+    await _route_random_gallery(update, gallery)"""Gallery Search Bot - Telegram Bot (async)"""
 import asyncio
 # Version: async-httpx-v2
 import httpx
