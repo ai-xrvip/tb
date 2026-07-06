@@ -753,12 +753,13 @@ async def _route_random_gallery(update, gallery):
     """Route to correct detail handler based on gallery source."""
     url = gallery.get("url", "")
     source = gallery.get("source", "")
+    pd = gallery.get("publish_date", "")
     if source == "ehentai" or "e-hentai.org" in url:
-        await _send_eh_detail(update, url)
+        await _send_eh_detail(update, url, publish_date=pd)
     elif source == "xchina" or "xchina.co" in url or "/photo/id-" in url:
         await _send_xchina_detail(update, url,
             author=gallery.get("author", ""),
-            publish_date=gallery.get("publish_date", ""))
+            publish_date=pd)
     else:
         await _send_gallery_detail(update, url, from_random=True)
 
@@ -1215,7 +1216,7 @@ async def _send_xchina_detail(update, url, author="", publish_date=""):
     if not sent:
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
-async def _send_eh_detail(update, url):
+async def _send_eh_detail(update, url, publish_date=""):
     user_id = update.effective_user.id
     await track_pre_clicked(user_id)
     try:
@@ -1235,6 +1236,8 @@ async def _send_eh_detail(update, url):
     text = f"📖 {html.escape(clean_title)}"
     if count:
         text += f"\n📸 {count}P"
+    if publish_date:
+        text += f"\n🕐 {publish_date}"
     if tags:
         text += "\n🏷 " + ", ".join(tags[:8])
 
