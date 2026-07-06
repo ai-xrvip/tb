@@ -45,16 +45,11 @@ EH_ENABLED = bool(config.EH_MEMBER_ID and config.EH_PASS_HASH)
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-_log_handler = RotatingFileHandler(
-    os.path.join(DATA_DIR, "bot.log"),
-    maxBytes=5 * 1024 * 1024,  # 5 MB
-    backupCount=2,
-    encoding="utf-8",
-)
+# File log disabled on Railway (volume permission issue), console only
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    handlers=[logging.StreamHandler(sys.stdout), _log_handler],
+    handlers=[logging.StreamHandler(sys.stdout)],
     force=True,
 )
 logger = logging.getLogger(__name__)
