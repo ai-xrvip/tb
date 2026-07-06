@@ -21,14 +21,46 @@ logger = logging.getLogger(__name__)
 _pre_cache: list[dict] = []
 _pre_cache_lock = asyncio.Lock()
 _pre_cache_task: Optional[asyncio.Task] = None
-_PRE_CACHE_SIZE = 8
-_PRE_CACHE_TTL = 600  # 10 min
+_pre_skip_count: dict[str, int] = {}  # {url: skip_count}
+_pre_user_last: dict[int, str] = {}  # {user_id: last_served_url}
+_PRE_CACHE_SIZE = 15
+_PRE_CACHE_TTL = 36000  # 10 hours
+
+
+async def track_pre_served(user_id: int, gallery_url: str):
+    """Record that a gallery was served to a user from pre-cache."""
+    async with _pre_cache_lock:
+        _pre_user_last[user_id] = gallery_url
+
+
+async def track_pre_clicked(user_id: int):
+    """User clicked into the gallery detail — cancel pending skip."""
+    async with _pre_cache_lock:
+        if user_id in _pre_user_last:
+            del _pre_user_last[user_id]
+
+
+async def track_pre_skipped(user_id: int):
+    """User got another recommendation without clicking the previous one."""
+    async with _pre_cache_lock:
+        prev_url = _pre_user_last.pop(user_id, None)
+        if prev_url:
+            _pre_skip_count[prev_url] = _pre_skip_count.get(prev_url, 0) + 1
+            if _pre_skip_count[prev_url] >= 3:
+                # Remove from cache
+                for i, g in enumerate(_pre_cache):
+                    if g.get("url") == prev_url:
+                        _pre_cache.pop(i)
+                        logger.info(f"Pre-cache: removed {prev_url[:60]} (skipped by 3+ users)")
+                        break
+                del _pre_skip_count[prev_url]
+
 
 async def _fill_pre_cache():
     """Background task: keep pre-cache filled with random galleries."""
     global _pre_cache
     while True:
-        await asyncio.sleep(120)  # refill every 2 min
+        await asyncio.sleep(14400)  # refill every 4 hours
         async with _pre_cache_lock:
             if len(_pre_cache) >= _PRE_CACHE_SIZE:
                 continue

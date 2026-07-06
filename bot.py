@@ -31,7 +31,7 @@ from scraper import (
     search_galleries, get_gallery_images, get_random_gallery,
     download_image, track_click,
     search_xchina, get_xchina_gallery,
-    pop_pre_cached, start_pre_cache,
+    pop_pre_cached, start_pre_cache, track_pre_served, track_pre_clicked, track_pre_skipped,
 )
 from proxy_pool import start_proxy_pool, stop_proxy_pool
 from scraper_eh import (
@@ -760,25 +760,25 @@ async def _handle_menu_random(update, context):
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
 
+    # Track skip for previous recommendation
+    await track_pre_skipped(user_id)
+
     # Try pre-cache first (instant)
     gallery = await pop_pre_cached()
     if gallery:
-        logger.info(f"Random: served from pre-cache ({gallery.get('title','')[:30]})")
+        logger.info(f"Random: pre-cache hit ({gallery.get('title','')[:30]})")
+        await track_pre_served(user_id, gallery["url"])
         await query.edit_message_text("🎲 随机推荐来啦～")
         await _send_gallery_detail(update, gallery["url"], from_random=True)
         return
 
-    # Pre-cache empty - search live
-    await query.edit_message_text("🎲 正在为你随机推荐...")
-    try:
-        gallery = await get_random_gallery()
-    except Exception:
-        await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
-        return
-    if not gallery:
-        await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
-        return
-    await _send_gallery_detail(update, gallery["url"], from_random=True)
+    # Cache empty - no live fallback
+    await query.edit_message_text(
+        "😔 暂无推荐，缓存正在补货中，请稍后再试～",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+        ]])
+    )
 async def _handle_menu_vip(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
@@ -1141,6 +1141,8 @@ async def _show_results_page(msg_or_query, user_id):
 
 
 async def _send_xchina_detail(update, url, author="", publish_date=""):
+
+    await track_pre_clicked(user_id)
     user_id = update.effective_user.id
     try:
         detail = await get_xchina_gallery(url)
@@ -1194,6 +1196,8 @@ async def _send_xchina_detail(update, url, author="", publish_date=""):
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def _send_eh_detail(update, url):
+
+    await track_pre_clicked(user_id)
     user_id = update.effective_user.id
     try:
         detail = await get_eh_gallery(url)
@@ -1261,6 +1265,8 @@ async def _send_eh_detail(update, url):
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def _send_gallery_detail(update, url, gallery_data=None, from_random=False):
+
+    await track_pre_clicked(user_id)
     user_id = update.effective_user.id
     logger.info("Fetching gallery: " + url[:80])
     if gallery_data is None:
