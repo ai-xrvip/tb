@@ -249,7 +249,10 @@ def _parse_count_from_title(title):
 
 
 def _clean_title(title):
-    """Clean title: remove size tags but preserve author/tag brackets."""
+    """Clean title: remove size tags, prefixes, and noise."""
+    # Remove known spam/template prefixes
+    title = re.sub(r"^\s*(?:国模套图|国模私拍|某某门|网红套图|街拍套图|极品套图|顶流套图|精品套图|福利套图)\s*[-|/\s]*", "", title)
+    title = re.sub(r"^\s*(?:稚乖画册|露颜|赤西夜夜|赤西)[-|/\s]*", "", title)
     title = re.sub(r"\s*\[\d+[^\]]*(?:MB|GB|photos?|张|P\b)[^\]]*\]", "", title)
     title = re.sub(r"\s*f:[a-z ]+$", "", title)
     # Normalize dots + collapse spaces + strip trailing separators
@@ -657,14 +660,21 @@ async def handle_text(update, context):
                 ]]))
         return
 
-    # Search flow
-    if user_id not in user_waiting_search:
+    # Default: any other text → treat as search keyword
+    if user_id in user_waiting_search:
+        user_waiting_search.discard(user_id)
+    elif user_id in user_waiting_card:
+        # Card activation flow already handled above; if we're here, code didn't match
+        user_waiting_card.discard(user_id)
+        await update.message.reply_text(
+            "❌ 卡密无效，请检查后重试。",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔑 重新输入", callback_data="vip_activate"),
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+            ]]))
         return
-    user_waiting_search.discard(user_id)
     keyword = text
     if not keyword:
-        await update.message.reply_text("⚠️ 请输入搜索关键词～")
-        user_waiting_search.add(user_id)
         return
     await _do_search(update, keyword)
 
@@ -755,11 +765,11 @@ async def _route_random_gallery(update, gallery):
     source = gallery.get("source", "")
     pd = gallery.get("publish_date", "")
     if source == "ehentai" or "e-hentai.org" in url:
-        await _send_eh_detail(update, url, publish_date=pd)
+        await _send_eh_detail(update, url, publish_date=pd, from_random=True)
     elif source == "xchina" or "xchina.co" in url or "/photo/id-" in url:
         await _send_xchina_detail(update, url,
             author=gallery.get("author", ""),
-            publish_date=pd)
+            publish_date=pd, from_random=True)
     else:
         await _send_gallery_detail(update, url, from_random=True)
 
@@ -1131,19 +1141,24 @@ async def _show_results_page(msg_or_query, user_id):
     buttons = []
     for i, r in enumerate(page_results):
         idx = start + i + 1
-        clean_title = _clean_title(r["title"])
-        source_badge = "📷"
-        author = r.get("author", "")
-        display_title = f"{author} - {clean_title}" if author else clean_title
-        text += f"{idx}. {source_badge} {html.escape(display_title)}\n"
-        author_name = r.get("author", "")
-        btn_label = author_name if author_name else clean_title
-        btn_label = btn_label[:32] + ".." if len(btn_label) > 35 else btn_label[:35]
+        raw_title = r["title"]
         author = r.get("author", "")
         publish_date = r.get("publish_date", "")
+
+        # Consistent display: author - title (both for text and button)
+        if author and author not in raw_title:
+            display_title = f"{author} - {_clean_title(raw_title)}"
+        else:
+            display_title = _clean_title(raw_title)
+
+        text += f"{idx}. 📷 {html.escape(display_title)}\n"
+
+        # Button label: use same display title, truncate to 35 chars
+        btn_label = display_title[:32] + ".." if len(display_title) > 35 else display_title[:35]
+
         url_key = await _store_url(r["url"], author=author, publish_date=publish_date)
         prefix = "e_" if r.get("source") == "ehentai" else ("x_" if r.get("source") == "xchina" else "d_")
-        buttons.append([InlineKeyboardButton(f"{source_badge} {idx}. {btn_label}", callback_data=prefix + url_key)])
+        buttons.append([InlineKeyboardButton(f"📷 {idx}. {btn_label}", callback_data=prefix + url_key)])
 
     # Pagination buttons — limited by accessible pages, not full_pages
     nav_buttons = []
@@ -1165,7 +1180,7 @@ async def _show_results_page(msg_or_query, user_id):
 
 
 
-async def _send_xchina_detail(update, url, author="", publish_date=""):
+async def _send_xchina_detail(update, url, author="", publish_date="", from_random=False):
     user_id = update.effective_user.id
     await track_pre_clicked(user_id)
     try:
@@ -1201,6 +1216,8 @@ async def _send_xchina_detail(update, url, author="", publish_date=""):
     buttons = []
     if images:
         buttons.append([InlineKeyboardButton("\U0001f5bc\ufe0f \u67e5\u770b\u5b8c\u6574\u56fe\u96c6", callback_data="f_" + url_key)])
+    if from_random:
+        buttons.append([InlineKeyboardButton("\U0001f504 \u6362\u4e00\u4e2a", callback_data="random_next")])
     buttons.append([InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")])
 
     keyboard = InlineKeyboardMarkup(buttons)
@@ -1223,7 +1240,7 @@ async def _send_xchina_detail(update, url, author="", publish_date=""):
     if not sent:
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
-async def _send_eh_detail(update, url, publish_date=""):
+async def _send_eh_detail(update, url, publish_date="", from_random=False):
     user_id = update.effective_user.id
     await track_pre_clicked(user_id)
     try:
@@ -1254,6 +1271,8 @@ async def _send_eh_detail(update, url, publish_date=""):
         buttons.append([InlineKeyboardButton("🖼️ 查看图集预览", callback_data="f_" + url_key)])
     if _is_vip(user_id):
         buttons.append([InlineKeyboardButton("🧲 获取磁力链", callback_data="m_" + url_key)])
+    if from_random:
+        buttons.append([InlineKeyboardButton("\U0001f504 换一个", callback_data="random_next")])
     buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
 
@@ -1595,34 +1614,4 @@ def main():
             def do_GET(self):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
-                self.end_headers()
-                self.wfile.write(b"OK")
-            def log_message(self, format, *args):
-                pass
-        port = int(os.environ.get("PORT", 8000))
-        health_srv = HTTPServer(("0.0.0.0", port), HealthHandler)
-        import threading
-        t = threading.Thread(target=health_srv.serve_forever, daemon=True)
-        t.start()
-        logger.info(f"Health server on port {port}")
-
-        async def _start_polling():
-            await app.initialize()
-            await app.start()
-            await start_proxy_pool()
-            await start_pre_cache()
-            asyncio.create_task(_periodic_cleanup(app))
-            await app.updater.start_polling(allowed_updates=["message", "callback_query"])
-            try:
-                while True:
-                    await asyncio.sleep(60)
-            except asyncio.CancelledError:
-                await shutdown(app)
-        try:
-            asyncio.run(_start_polling())
-        except KeyboardInterrupt:
-            asyncio.run(shutdown(app, "SIGINT"))
-
-
-if __name__ == "__main__":
-    main()
+                self.e

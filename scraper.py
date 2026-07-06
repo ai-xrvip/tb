@@ -330,11 +330,16 @@ async def search_galleries(keyword: str, max_results: int = None, max_pages: int
             excerpt_el = article.find(["p", ".excerpt", ".entry-summary", ".description"])
             description = excerpt_el.text.strip()[:200] if excerpt_el else ""
 
+            # 4KHD search results: try to extract publish_date from page context
+            pd = _extract_date(text) if sp_idx == 0 and not all_results else ""
+
             all_results.append({
                 "title": title,
                 "url": link,
                 "cover": cover,
                 "description": description,
+                "source": "4khd",
+                "publish_date": pd,
             })
             seen_urls.add(link)
 
@@ -475,20 +480,47 @@ async def download_image(url: str, referer: str = config.BASE_URL) -> Optional[t
 
 
 async def get_random_gallery():
-    """Live fallback: EH then XC (4KHD skipped due to server issues)."""
+    """Get a random gallery: prefer pre-cache, fallback to live search."""
     import random as _random
+    try:
+        from pre_cache import pop_pre_cached
+        cached = await pop_pre_cached()
+        if cached:
+            logger.info(f"Random: served from pre-cache {cached.get('title', '?')[:40]}")
+            return cached
+    except Exception:
+        pass
+
+    # Live fallback: search all 3 platforms with hot keywords
     hot_kws = await get_hot_keywords(top_n=5)
     kw = _random.choice(hot_kws) if hot_kws else "cosplay"
+    candidates = []
+
+    # EH
     if config.EH_MEMBER_ID:
         try:
             from scraper_eh import search_ehentai
             eh = await search_ehentai(kw, max_results=10, max_pages=1)
-            if eh: return _random.choice(eh)
-        except Exception: pass
+            candidates.extend(eh)
+        except Exception:
+            pass
+
+    # XC
     try:
         xc = await search_xchina(kw, max_results=15, max_pages=1)
-        if xc: return _random.choice(xc)
-    except Exception: pass
+        candidates.extend(xc)
+    except Exception:
+        pass
+
+    # 4KHD
+    try:
+        hd = await search_galleries(kw, max_results=10, max_pages=1)
+        candidates.extend(hd)
+    except Exception:
+        pass
+
+    if candidates:
+        return _random.choice(candidates)
     return None
 
 
@@ -760,29 +792,4 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
 
     # If no images found from HTML, generate from pattern
     if not images and gallery_id:
-        # Try without leading zeros first (common format)
-        for i in range(1, min(max_images + 1, 21)):
-            images.append(f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp")
-
-    result["images"] = images[:max_images]
-
-    # Photo count
-    count_text = ""
-    tags_div = soup.select_one(".tags, .photo-info")
-    if tags_div:
-        count_text = tags_div.text.strip()
-    count = _parse_xc_count(count_text)
-    if count == 0:
-        count = len(images)
-    result["count"] = count
-
-    # Cover = first image
-    if images:
-        result["cover"] = images[0]
-        # Download cover via curl_cffi to bypass Cloudflare
-        img_result = await _xc_fetch_bytes(images[0], referer=url)
-        if img_result:
-            result["cover_bytes"] = img_result
-
-    await _cache_set(cache_key, result)
-    return result
+        # Try without le
