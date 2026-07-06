@@ -681,29 +681,22 @@ async def _do_search(update, keyword):
         )
         return
 
-    # Search all sources in parallel
-    hd_task = asyncio.create_task(search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS))
-    xc_task = asyncio.create_task(search_xchina(keyword, max_results=config.MAX_SEARCH_RESULTS))
-    eh_task = asyncio.create_task(search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS)) if EH_ENABLED else None
+    # Search all sources truly in parallel with asyncio.gather
+    tasks = [
+        search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS),
+        search_xchina(keyword, max_results=config.MAX_SEARCH_RESULTS),
+    ]
+    if EH_ENABLED:
+        tasks.append(search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS))
     
-    hd_results = []
-    xc_results = []
-    try:
-        hd_results = await hd_task
-    except Exception as e:
-        logger.error(f"4KHD search error: {traceback.format_exc()}")
-    try:
-        xc_results = await xc_task
-    except Exception as e:
-        logger.error(f"XChina search error: {traceback.format_exc()}")
+    gathered = await asyncio.gather(*tasks, return_exceptions=True)
+    hd_results = gathered[0] if not isinstance(gathered[0], Exception) else []
+    xc_results = gathered[1] if not isinstance(gathered[1], Exception) else []
+    eh_results = gathered[2] if len(gathered) > 2 and not isinstance(gathered[2], Exception) else []
     
-    # Combine: 4KHD first, then XChina
-    eh_results = []
-    if eh_task:
-        try:
-            eh_results = await eh_task
-        except Exception as e:
-            logger.error(f"EH search error: {traceback.format_exc()}")
+    for i, (label, exc) in enumerate([("4KHD", gathered[0]), ("XChina", gathered[1]), ("EH", gathered[2] if len(gathered) > 2 else None)]):
+        if isinstance(exc, Exception):
+            logger.error(f"{label} search error: {exc}")
 
     # Combine and sort by publish date (newest first)
     merged = hd_results + xc_results + eh_results
