@@ -15,7 +15,6 @@ import gc
 from datetime import datetime
 from collections import defaultdict
 from logging.handlers import RotatingFileHandler
-from threading import Lock
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -98,7 +97,8 @@ MENU_KEYBOARD = ReplyKeyboardMarkup([
     [KeyboardButton("🔍 搜索"), KeyboardButton("🎲 推荐"), KeyboardButton("👑 VIP"), KeyboardButton("👤 我的")],
 ], resize_keyboard=True)
 
-_THREE_DAYS = 3 * 86400
+_ONE_DAY = 86400
+PURCHASE_URL = "https://t.me/xiuren88bot?start=buy_524"
 
 
 # ========== State Helpers ==========
@@ -107,11 +107,12 @@ def _now():
     return datetime.now().timestamp()
 
 
-def _cleanup_url_store():
+async def _cleanup_url_store():
     """Remove URL entries older than URL_TTL to prevent memory leaks."""
     global url_store
     now = _now()
-    url_store = {k: v for k, v in url_store.items() if now - v.get("ts", 0) < URL_TTL}
+    async with _url_store_lock:
+        url_store = {k: v for k, v in url_store.items() if now - v.get("ts", 0) < URL_TTL}
 
 
 def _cleanup_user_state(user_id):
@@ -122,13 +123,13 @@ def _cleanup_user_state(user_id):
             del user_search_state[user_id]
 
 
-def _cleanup_all():
+async def _cleanup_all():
     """Periodic cleanup of all state stores."""
     now = _now()
     stale_users = [uid for uid, s in user_search_state.items() if now - s.get("ts", 0) > USER_STATE_TTL]
     for uid in stale_users:
         del user_search_state[uid]
-    _cleanup_url_store()
+    await _cleanup_url_store()
 
 
 def _save_vip():
@@ -212,7 +213,7 @@ async def _store_url(url, **kwargs):
         entry.update(kwargs)
         url_store[key] = entry
         if url_counter % 1000 == 0:
-            _cleanup_url_store()
+            await _cleanup_url_store()
     return key
 
 
@@ -288,7 +289,7 @@ def _parse_date_for_sort(date_str):
     return ""
 
 
-async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"):
+async def _send_or_edit(msg_or_query, text, reply_markup=None, parse_mode="HTML"):
     try:
         if isinstance(msg_or_query, Message):
             await msg_or_query.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
@@ -297,7 +298,7 @@ async def _edit_message(msg_or_query, text, reply_markup=None, parse_mode="HTML"
     except Exception as e:
         err_str = str(e)
         if "not modified" not in err_str.lower():
-            logger.warning(f"_edit_message failed: {err_str}")
+            logger.warning(f"_send_or_edit failed: {err_str}")
 
 
 # ========== Start Menu ==========
@@ -489,7 +490,7 @@ async def cmd_my(update, context):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
-                [InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")],
+                [InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)],
                 [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")],
             ]))
 
@@ -529,10 +530,10 @@ async def cmd_random(update, context):
         gallery = await get_random_gallery()
     except Exception as e:
         logger.error(f"Random error: {traceback.format_exc()}")
-        await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
+        await _send_or_edit(msg, "😔 获取随机推荐失败，请稍后再试。")
         return
     if not gallery:
-        await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
+        await _send_or_edit(msg, "😔 获取随机推荐失败，请稍后再试。")
         return
     await msg.delete()
     await _route_random_gallery(update, gallery)
@@ -594,7 +595,7 @@ async def handle_text(update, context):
             await update.message.reply_text(VIP_TEXT, parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
-                    [InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")],
+                    [InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)],
                     [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
                 ]))
         return
@@ -777,10 +778,10 @@ async def _handle_random_next(update, context):
     try:
         gallery = await get_random_gallery()
     except Exception:
-        await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
+        await _send_or_edit(msg, "😔 获取随机推荐失败，请稍后再试。")
         return
     if not gallery:
-        await _edit_message(msg, "😔 获取随机推荐失败，请稍后再试。")
+        await _send_or_edit(msg, "😔 获取随机推荐失败，请稍后再试。")
         return
     await msg.delete()
     await _route_random_gallery(update, gallery)
@@ -816,7 +817,7 @@ async def _handle_menu_vip(update, context):
     await query.edit_message_text(VIP_TEXT, parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
-            [InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")],
+            [InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)],
             [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
         ]))
 
@@ -976,7 +977,7 @@ async def handle_callback(update, context):
                 await query.edit_message_text(VIP_TEXT, parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
-                        [InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")],
+                        [InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)],
                         [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
                     ]))
         elif data == "admin_gencode":
@@ -986,19 +987,22 @@ async def handle_callback(update, context):
             cards = _load_cards()
             generated = []
             types = [
-                ("📅 月卡(Y)", "Y", 30),
-                ("📅 季卡(J)", "J", 90),
-                ("📅 年卡(N)", "N", 360),
-                ("📅 永久(S)", "S", 0),
+                ("📅 月卡(Y)", "month", 30),
+                ("📅 季卡(J)", "quarter", 90),
+                ("📅 年卡(N)", "year", 360),
+                ("📅 永久(S)", "forever", 0),
             ]
-            for label, prefix, days in types:
+            for label, tname, days_val in types:
+                prefix_map = {"month": "Y", "quarter": "J", "year": "N", "forever": "S"}
+                prefix = prefix_map[tname]
                 for _ in range(10):
                     code = prefix + "-" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
-                    cards[code] = {"used": False, "used_by": None, "used_at": None, "type": prefix, "days": days, "created_by": user_id}
+                    cards[code] = {"used": False, "used_by": None, "used_at": None, "type": tname, "days": days_val, "created_by": user_id}
                     generated.append(code)
             _save_cards(cards)
             gen_lines = ["🔫 <b>已生成 40 张卡密</b>", ""]
-            for label, prefix, days in types:
+            for label, tname, days_val in types:
+                prefix = {"month": "Y", "quarter": "J", "year": "N", "forever": "S"}[tname]
                 type_codes = [c for c in generated if c.startswith(prefix)]
                 gen_lines.append(f"{label}: {len(type_codes)}张")
             gen_lines.append("")
@@ -1161,7 +1165,7 @@ async def _show_results_page(msg_or_query, user_id):
         InlineKeyboardButton("👑 开通VIP", callback_data="menu_vip"),
         InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home"),
     ])
-    await _edit_message(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
+    await _send_or_edit(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
 
 
 
@@ -1191,6 +1195,7 @@ async def _send_xchina_detail(update, url, author="", publish_date=""):
     clean_title = re.sub(r"\s*[-|]\s*XChina.*$", "", clean_title, flags=re.IGNORECASE)
     clean_title = re.sub(r"\s*\([^)]*免费[^)]*\)", "", clean_title)
     clean_title = clean_title.strip()
+    display_title = f"{final_author} - {clean_title}" if final_author else clean_title
     text = f"\U0001f380 {html.escape(display_title)}"
     if count:
         text += f"\n\U0001f4f8 {count}P"
@@ -1350,8 +1355,7 @@ async def _send_gallery_full(update, url):
         all_images = eh_data["images"]
     elif is_xchina:
         # Use sequential URL pattern for xchina
-        import re as _re
-        gid = _re.search(r"/id-([a-f0-9]+)", url)
+        gid = re.search(r"/id-([a-f0-9]+)", url)
         if gid:
             gallery_id = gid.group(1)
             max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
@@ -1420,8 +1424,7 @@ async def _send_gallery_page(update, url, page=0):
             return
         all_images = eh_data["images"]
     elif is_xchina:
-        import re as _re
-        gid = _re.search(r"/id-([a-f0-9]+)", url)
+        gid = re.search(r"/id-([a-f0-9]+)", url)
         if gid:
             gallery_id = gid.group(1)
             max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
@@ -1546,14 +1549,14 @@ def main():
         last_reminder_day = 0
         while True:
             await asyncio.sleep(600)
-            _cleanup_all()
+            await _cleanup_all()
             gc.collect()
             today = datetime.now().strftime("%Y%m%d")
             if today != last_reminder_day:
                 last_reminder_day = today
                 now = _now()
                 for uid, expiry in list(VIP_USERS.items()):
-                    if expiry is not None and 0 < expiry - now <= _THREE_DAYS:
+                    if expiry is not None and 0 < expiry - now <= _ONE_DAY:
                         exp_str = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
                         try:
                             await application.bot.send_message(
@@ -1561,7 +1564,7 @@ def main():
                                 text=f"⏰ <b>VIP即将到期提醒</b>\n\n你的VIP会员将于 <b>{exp_str}</b> 到期，请及时续费哦～",
                                 parse_mode="HTML",
                                 reply_markup=InlineKeyboardMarkup([[
-                                    InlineKeyboardButton("💳 购买卡密", url="https://t.me/xiuren88bot?start=buy_524")
+                                    InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)
                                 ]])
                             )
                         except Exception:

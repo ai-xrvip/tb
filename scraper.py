@@ -117,12 +117,6 @@ async def _cache_set(key: str, data: Any):
         _cache[key] = (datetime.now().timestamp(), data)
 
 
-async def _cache_clear_all():
-    """Clear entire cache."""
-    async with _cache_lock:
-        _cache.clear()
-
-
 def _fix_image_url(src: str) -> Optional[str]:
     if not src:
         return None
@@ -701,10 +695,9 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
                 break
 
     # Extract all image URLs from background-image styles
-    import re as re_mod
-    img_urls = re_mod.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+_600x0\.webp", text)
+    img_urls = re.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+_600x0\.webp", text)
     if not img_urls:
-        img_urls = re_mod.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+\.webp", text)
+        img_urls = re.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+\.webp", text)
         if img_urls:
             img_urls = [u.replace(".webp", "_600x0.webp") if "_600x0" not in u else u for u in img_urls]
     images = []

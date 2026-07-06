@@ -5,3 +5,4 @@ __pycache__/
 *.py[cod]
 *.log
 railway.env
+find_eh.js
