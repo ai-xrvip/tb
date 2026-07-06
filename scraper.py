@@ -481,10 +481,9 @@ async def download_image(url: str, referer: str = config.BASE_URL) -> Optional[t
 
 
 async def get_random_gallery() -> Optional[dict]:
-    """Get a random gallery recommendation from all 3 sources, preferring recent (3 days)."""
+    """Get a random gallery from 4KHD + XChina + EH in parallel, preferring recent."""
     import random as _random
-    from datetime import datetime as _dt, timedelta as _td
-    from scraper_eh import search_ehentai as _search_eh
+    from datetime import datetime as _dt
 
     results = []
     seen_urls = set()
@@ -495,14 +494,14 @@ async def get_random_gallery() -> Optional[dict]:
         pd = r.get("publish_date", "")
         parsed = _parse_date_for_sort(pd)
         if not parsed:
-            return False  # no date = not recent (skip)
+            return True  # unknown date = include (don't filter out)
         try:
             dt = _dt.strptime(parsed, "%Y-%m-%d")
             return dt.timestamp() > recent_cutoff
         except Exception:
-            return False
+            return True  # unparseable = include
 
-    # 1. Try top clicked galleries
+    # 1. Top clicked galleries
     top_urls = []
     async with _click_lock:
         if gallery_clicks:
@@ -522,58 +521,46 @@ async def get_random_gallery() -> Optional[dict]:
                         results.append(r)
                         seen_urls.add(r["url"])
 
-    # 2. Hot keywords from 4KHD
+    # 2. Hot keywords — parallel search across all sources
     hot_kws = await get_hot_keywords(top_n=3)
+    tasks = []
+    # 4KHD
     for kw in hot_kws:
-        search_results = await search_galleries(kw, max_results=10, max_pages=1)
-        for r in search_results:
-            if r["url"] not in seen_urls:
-                results.append(r)
-                seen_urls.add(r["url"])
-
-    # 3. XChina search
-    hot_kws_xc = await get_hot_keywords(top_n=2)
-    for kw in hot_kws_xc:
-        try:
-            xc_results = await search_xchina(kw, max_results=10, max_pages=1)
-            for r in xc_results:
+        tasks.append(search_galleries(kw, max_results=8, max_pages=1))
+    # XChina
+    for kw in hot_kws[:2]:
+        tasks.append(search_xchina(kw, max_results=8, max_pages=1))
+    # EH
+    if config.EH_MEMBER_ID:
+        from scraper_eh import search_ehentai
+        for kw in hot_kws[:1]:
+            tasks.append(search_ehentai(kw, max_results=5, max_pages=1))
+    # Parallel gather
+    gathered = await asyncio.gather(*tasks, return_exceptions=True)
+    for g in gathered:
+        if isinstance(g, list):
+            for r in g:
                 if r["url"] not in seen_urls:
                     results.append(r)
                     seen_urls.add(r["url"])
-        except Exception:
-            pass
 
-    # 4. EH search
-    if bool(config.EH_MEMBER_ID and config.EH_PASS_HASH):
-        for kw in hot_kws[:2]:
-            try:
-                eh_results = await _search_eh(kw, max_results=5, max_pages=1)
-                for r in eh_results:
-                    if r["url"] not in seen_urls:
-                        results.append(r)
-                        seen_urls.add(r["url"])
-            except Exception:
-                pass
-
-    # 5. Prefer recent galleries, fallback to all
+    # 3. Prefer recent, fallback to all
     recent = [r for r in results if _is_recent(r)]
-    pool = recent if recent else results
+    pool = recent if len(recent) >= 3 else results  # need at least 3 recent to use that pool
 
     if pool:
-        # Weight by click popularity
         weighted = []
         for r in pool:
             async with _click_lock:
                 weight = gallery_clicks.get(r["url"], 0) + 1
-            weighted.extend([r] * min(weight, 5))  # cap weight to prevent bias
+            weighted.extend([r] * min(weight, 5))
         return _random.choice(weighted)
 
-    # 6. Ultimate fallback
+    # 4. Ultimate fallback — just 4KHD
     results = await search_galleries("cosplay", max_results=30, max_pages=1)
     if not results:
         results = await search_galleries("", max_results=30, max_pages=1)
     return _random.choice(results) if results else None
-
 
 # ========== XChina.co ==========
 
