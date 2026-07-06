@@ -527,6 +527,35 @@ async def _xc_fetch(url: str, retries: int = 2) -> str | None:
     return None
 
 
+async def _xc_fetch_bytes(url: str, referer: str = "") -> Optional[tuple[BytesIO, str]]:
+    """Download an XChina image with curl_cffi to bypass Cloudflare."""
+    headers = dict(XC_HEADERS)
+    if referer:
+        headers["Referer"] = referer
+    for attempt in range(2):
+        try:
+            r = await asyncio.to_thread(
+                curl_req.get,
+                url,
+                headers=headers,
+                impersonate="chrome124",
+                timeout=20,
+            )
+            if r.status_code == 200 and len(r.content) > 500:
+                ct = r.headers.get("Content-Type", "image/jpeg")
+                if not ct.startswith("image/"):
+                    return None
+                result = BytesIO(r.content)
+                cropped = crop_watermark(result)
+                return cropped, ct
+            logger.warning(f"XC img HTTP {r.status_code} size={len(r.content)} for {url[:60]}")
+        except Exception as e:
+            if attempt == 1:
+                logger.warning(f"XC img download failed {url[:60]}: {e}")
+        await asyncio.sleep(1)
+    return None
+
+
 def _extract_xc_gallery_id(url: str) -> str:
     """Extract gallery ID from xchina photo URL like /photo/id-6a4383664c43b.html"""
     m = re.search(r"/id-([a-f0-9]+)\.html", url)
@@ -620,15 +649,25 @@ async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 
             author = ""
             for div in item.select("div"):
                 txt = div.text.strip()
-                # Author is typically a short name (< 20 chars), not a number, not the title
-                if txt and len(txt) < 20 and txt != title[:len(txt)] and not txt.startswith("20"):
-                    # Skip count patterns like "155P"
-                    if re.search(r"^\d+P", txt):
-                        continue
-                    # If we find a short text that looks like a name/studio (Chinese/English)
-                    if re.search(r"[一-鿿]|[a-zA-Z]", txt):
-                        author = txt
-                        break
+                # Author/studio signals: 2-15 chars, contains CJK or Latin, not a date/count/title fragment
+                if not txt or len(txt) < 2 or len(txt) > 15:
+                    continue
+                if txt == title[:len(txt)]:
+                    continue
+                if txt.startswith("20") and re.search(r"^20\d{2}", txt):
+                    continue
+                if re.search(r"^\d+\s*P", txt):
+                    continue
+                # Garbage noise: single English letters, "US", junk tokens
+                if re.search(r"^[a-zA-Z]{1,2}$", txt):
+                    continue
+                # Valid: contains CJK, or is a recognizable Latin name (2+ words or starts with uppercase)
+                if re.search(r"[一-鿿]", txt):
+                    author = txt
+                    break
+                if re.search(r"^[A-Z][a-z]", txt) and not re.search(r"^\d", txt):
+                    author = txt
+                    break
 
             all_results.append({
                 "title": title,
@@ -689,10 +728,22 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
     result["author"] = ""
     for div in soup.select("div"):
         txt = div.text.strip()
-        if txt and len(txt) < 20 and txt != result["title"][:len(txt)] and re.search(r"[一-鿿]|[a-zA-Z]", txt):
-            if not txt.startswith("20") and not re.search(r"^\d+P", txt):
-                result["author"] = txt
-                break
+        if not txt or len(txt) < 2 or len(txt) > 15:
+            continue
+        if txt == result["title"][:len(txt)]:
+            continue
+        if txt.startswith("20") and re.search(r"^20\d{2}", txt):
+            continue
+        if re.search(r"^\d+\s*P", txt):
+            continue
+        if re.search(r"^[a-zA-Z]{1,2}$", txt):
+            continue
+        if re.search(r"[一-鿿]", txt):
+            result["author"] = txt
+            break
+        if re.search(r"^[A-Z][a-z]", txt) and not re.search(r"^\d", txt):
+            result["author"] = txt
+            break
 
     # Extract all image URLs from background-image styles
     img_urls = re.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+_600x0\.webp", text)
@@ -728,8 +779,8 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
     # Cover = first image
     if images:
         result["cover"] = images[0]
-        # Download cover
-        img_result = await _fetch_bytes(images[0], referer=url)
+        # Download cover via curl_cffi to bypass Cloudflare
+        img_result = await _xc_fetch_bytes(images[0], referer=url)
         if img_result:
             result["cover_bytes"] = img_result
 
