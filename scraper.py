@@ -330,9 +330,8 @@ async def search_galleries(keyword: str, max_results: int = None, max_pages: int
             excerpt_el = article.find(["p", ".excerpt", ".entry-summary", ".description"])
             description = excerpt_el.text.strip()[:200] if excerpt_el else ""
 
-            # 4KHD search results: try to extract publish_date from page context
+            # Extract publish_date from page meta
             pd = _extract_date(text) if sp_idx == 0 and not all_results else ""
-
             all_results.append({
                 "title": title,
                 "url": link,
@@ -792,4 +791,29 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
 
     # If no images found from HTML, generate from pattern
     if not images and gallery_id:
-        # Try without le
+        # Try without leading zeros first (common format)
+        for i in range(1, min(max_images + 1, 21)):
+            images.append(f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp")
+
+    result["images"] = images[:max_images]
+
+    # Photo count
+    count_text = ""
+    tags_div = soup.select_one(".tags, .photo-info")
+    if tags_div:
+        count_text = tags_div.text.strip()
+    count = _parse_xc_count(count_text)
+    if count == 0:
+        count = len(images)
+    result["count"] = count
+
+    # Cover = first image
+    if images:
+        result["cover"] = images[0]
+        # Download cover via curl_cffi to bypass Cloudflare
+        img_result = await _xc_fetch_bytes(images[0], referer=url)
+        if img_result:
+            result["cover_bytes"] = img_result
+
+    await _cache_set(cache_key, result)
+    return result
