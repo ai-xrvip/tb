@@ -1147,8 +1147,8 @@ async def _show_results_page(msg_or_query, user_id):
 
 
 async def _send_xchina_detail(update, url, author="", publish_date=""):
-    await track_pre_clicked(user_id)
     user_id = update.effective_user.id
+    await track_pre_clicked(user_id)
     try:
         detail = await get_xchina_gallery(url)
     except Exception as e:
@@ -1201,8 +1201,8 @@ async def _send_xchina_detail(update, url, author="", publish_date=""):
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def _send_eh_detail(update, url):
-    await track_pre_clicked(user_id)
     user_id = update.effective_user.id
+    await track_pre_clicked(user_id)
     try:
         detail = await get_eh_gallery(url)
     except Exception:
@@ -1262,8 +1262,8 @@ async def _send_eh_detail(update, url):
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def _send_gallery_detail(update, url, gallery_data=None, from_random=False):
-    await track_pre_clicked(user_id)
     user_id = update.effective_user.id
+    await track_pre_clicked(user_id)
     logger.info("Fetching gallery: " + url[:80])
     if gallery_data is None:
         try:
