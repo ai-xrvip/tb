@@ -31,9 +31,12 @@ from scraper import (
     search_galleries, get_gallery_images, get_random_gallery,
     download_image, track_click,
     search_xchina, get_xchina_gallery,
-    pop_pre_cached, start_pre_cache, track_pre_served, track_pre_clicked, track_pre_skipped, get_pre_cache_size,
 )
 from proxy_pool import start_proxy_pool, stop_proxy_pool
+from pre_cache import (
+    pop_pre_cached, start_pre_cache, track_pre_served,
+    track_pre_clicked, track_pre_skipped,
+)
 from scraper_eh import (
     search_ehentai, get_eh_gallery, get_eh_magnet,
 )
@@ -217,8 +220,9 @@ def _get_url(key):
     entry = url_store.get(key)
     if not entry:
         return ""
-    # Check TTL -- cleanup delegated to _cleanup_url_store (periodic)
+    # Check TTL
     if _now() - entry.get("ts", 0) > URL_TTL:
+        del url_store[key]
         return ""
     return entry["url"]
 
@@ -682,22 +686,29 @@ async def _do_search(update, keyword):
         )
         return
 
-    # Search all sources truly in parallel with asyncio.gather
-    tasks = [
-        search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS),
-        search_xchina(keyword, max_results=config.MAX_SEARCH_RESULTS),
-    ]
-    if EH_ENABLED:
-        tasks.append(search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS))
+    # Search all sources in parallel
+    hd_task = asyncio.create_task(search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS))
+    xc_task = asyncio.create_task(search_xchina(keyword, max_results=config.MAX_SEARCH_RESULTS))
+    eh_task = asyncio.create_task(search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS)) if EH_ENABLED else None
     
-    gathered = await asyncio.gather(*tasks, return_exceptions=True)
-    hd_results = gathered[0] if not isinstance(gathered[0], Exception) else []
-    xc_results = gathered[1] if not isinstance(gathered[1], Exception) else []
-    eh_results = gathered[2] if len(gathered) > 2 and not isinstance(gathered[2], Exception) else []
+    hd_results = []
+    xc_results = []
+    try:
+        hd_results = await hd_task
+    except Exception as e:
+        logger.error(f"4KHD search error: {traceback.format_exc()}")
+    try:
+        xc_results = await xc_task
+    except Exception as e:
+        logger.error(f"XChina search error: {traceback.format_exc()}")
     
-    for i, (label, exc) in enumerate([("4KHD", gathered[0]), ("XChina", gathered[1]), ("EH", gathered[2] if len(gathered) > 2 else None)]):
-        if isinstance(exc, Exception):
-            logger.error(f"{label} search error: {exc}")
+    # Combine: 4KHD first, then XChina
+    eh_results = []
+    if eh_task:
+        try:
+            eh_results = await eh_task
+        except Exception as e:
+            logger.error(f"EH search error: {traceback.format_exc()}")
 
     # Combine and sort by publish date (newest first)
     merged = hd_results + xc_results + eh_results
@@ -759,34 +770,18 @@ async def _handle_menu_random(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
-
-    # Track skip for previous recommendation
-    await track_pre_skipped(user_id)
-
-    # Try pre-cache first (instant)
-    gallery = await pop_pre_cached()
-    if gallery:
-        logger.info(f"Random: pre-cache hit ({gallery.get('title','')[:30]})")
-        await track_pre_served(user_id, gallery["url"])
-        await query.edit_message_text("🎲 随机推荐来啦～")
-        await _send_gallery_detail(update, gallery["url"], from_random=True)
-        return
-
-    # Cache empty - live fallback (EH -> XC, skip 4KHD)
     await query.edit_message_text("🎲 正在为你随机推荐...")
     try:
         gallery = await get_random_gallery()
     except Exception:
-        gallery = None
-    if gallery:
-        await _send_gallery_detail(update, gallery["url"], from_random=True)
-    else:
-        await query.edit_message_text(
-            "😔 暂无推荐，请稍后再试～",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
-            ]])
-        )
+        await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
+        return
+    if not gallery:
+        await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
+        return
+    await _send_gallery_detail(update, gallery["url"], from_random=True)
+
+
 async def _handle_menu_vip(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
@@ -1098,9 +1093,12 @@ async def _show_results_page(msg_or_query, user_id):
     keyword = state["keyword"]
     total = len(results)
 
+    # FIX: Consistent page count for display
     full_pages = max(1, (total + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE)
     is_vip = _is_vip(user_id)
+    # Non-VIP sees only first 2 pages, VIP sees all
     max_accessible_pages = full_pages if is_vip else min(full_pages, 2)
+    accessible_total = min(total, max_accessible_pages * RESULTS_PER_PAGE)
 
     start = page * RESULTS_PER_PAGE
     end = min(start + RESULTS_PER_PAGE, total)
@@ -1149,7 +1147,6 @@ async def _show_results_page(msg_or_query, user_id):
 
 
 async def _send_xchina_detail(update, url, author="", publish_date=""):
-
     await track_pre_clicked(user_id)
     user_id = update.effective_user.id
     try:
@@ -1204,7 +1201,6 @@ async def _send_xchina_detail(update, url, author="", publish_date=""):
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def _send_eh_detail(update, url):
-
     await track_pre_clicked(user_id)
     user_id = update.effective_user.id
     try:
@@ -1224,13 +1220,6 @@ async def _send_eh_detail(update, url):
     text = f"📖 {html.escape(clean_title)}"
     if count:
         text += f"\n📸 {count}P"
-    # Show publish_date from stored search metadata
-    for v in url_store.values():
-        if v.get("url") == url:
-            pd = v.get("publish_date", "")
-            if pd:
-                text += f"\n🕐 {pd}"
-                break
     if tags:
         text += "\n🏷 " + ", ".join(tags[:8])
 
@@ -1273,7 +1262,6 @@ async def _send_eh_detail(update, url):
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 async def _send_gallery_detail(update, url, gallery_data=None, from_random=False):
-
     await track_pre_clicked(user_id)
     user_id = update.effective_user.id
     logger.info("Fetching gallery: " + url[:80])
@@ -1328,7 +1316,7 @@ async def _send_gallery_full(update, url):
     is_xchina = "/photo/id-" in url
     if is_ehentai:
         try:
-            max_imgs = 999 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
             eh_data = await get_eh_gallery(url, max_images=max_imgs)
         except Exception:
             logger.error("EH full gallery error: " + traceback.format_exc())
@@ -1336,25 +1324,19 @@ async def _send_gallery_full(update, url):
             return
         all_images = eh_data["images"]
     elif is_xchina:
-        # Get real images from gallery HTML first
-        try:
-            xc_data = await get_xchina_gallery(url, max_images=999)
-            all_images = xc_data.get("images", [])
-            if not all_images:
-                raise ValueError("No images from HTML")
-        except Exception:
-            logger.warning("XC full: fallback to URL pattern")
-            import re as _re
-            gid = _re.search(r"/id-([a-f0-9]+)", url)
-            if gid:
-                gallery_id = gid.group(1)
-                all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, 31)]
-            else:
-                await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
-                return
+        # Use sequential URL pattern for xchina
+        import re as _re
+        gid = _re.search(r"/id-([a-f0-9]+)", url)
+        if gid:
+            gallery_id = gid.group(1)
+            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
+        else:
+            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+            return
     else:
         try:
-            max_imgs = 999 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
             gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
         except Exception:
             logger.error("Full gallery error: " + traceback.format_exc())
@@ -1406,31 +1388,25 @@ async def _send_gallery_page(update, url, page=0):
     is_xchina = "/photo/id-" in url
     if is_ehentai:
         try:
-            max_imgs = 999 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
             eh_data = await get_eh_gallery(url, max_images=max_imgs)
         except Exception:
             await update.effective_message.reply_text("❌ 加载EH图集失败")
             return
         all_images = eh_data["images"]
     elif is_xchina:
-        try:
-            xc_data = await get_xchina_gallery(url, max_images=999)
-            all_images = xc_data.get("images", [])
-            if not all_images:
-                raise ValueError("No images from HTML")
-        except Exception:
-            logger.warning("XC page: fallback to URL pattern")
-            import re as _re
-            gid = _re.search(r"/id-([a-f0-9]+)", url)
-            if gid:
-                gallery_id = gid.group(1)
-                all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, 31)]
-            else:
-                await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
-                return
+        import re as _re
+        gid = _re.search(r"/id-([a-f0-9]+)", url)
+        if gid:
+            gallery_id = gid.group(1)
+            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
+        else:
+            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+            return
     else:
         try:
-            max_imgs = 999 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 200 if _is_vip(user_id) else config.MAX_IMAGES_PER_POST
             gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
         except Exception:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
