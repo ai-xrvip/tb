@@ -481,86 +481,52 @@ async def download_image(url: str, referer: str = config.BASE_URL) -> Optional[t
 
 
 async def get_random_gallery() -> Optional[dict]:
-    """Get a random gallery from 4KHD + XChina + EH in parallel, preferring recent."""
+    """Get a random gallery: EH first (fastest), then XChina, then 4KHD as fallback."""
     import random as _random
-    from datetime import datetime as _dt
 
-    results = []
-    seen_urls = set()
-    now_ts = _dt.now().timestamp()
-    recent_cutoff = now_ts - 3 * 86400
+    # Pick a hot keyword
+    hot_kws = await get_hot_keywords(top_n=5)
+    kw = _random.choice(hot_kws) if hot_kws else "cosplay"
+    logger.info(f"Random: using keyword={kw!r}")
 
-    def _is_recent(r):
-        pd = r.get("publish_date", "")
-        parsed = _parse_date_for_sort(pd)
-        if not parsed:
-            return True  # unknown date = include (don't filter out)
-        try:
-            dt = _dt.strptime(parsed, "%Y-%m-%d")
-            return dt.timestamp() > recent_cutoff
-        except Exception:
-            return True  # unparseable = include
-
-    # 1. Top clicked galleries
-    top_urls = []
-    async with _click_lock:
-        if gallery_clicks:
-            sorted_clicks = sorted(gallery_clicks.items(), key=lambda x: x[1], reverse=True)
-            top_urls = [url for url, _ in sorted_clicks[:5]]
-    if top_urls:
-        _random.shuffle(top_urls)
-        for url in top_urls:
-            async with _click_lock:
-                title = gallery_titles.get(url, "")
-            keywords = title.split()[:3] if title else []
-            kw = " ".join(keywords) if keywords else ""
-            if kw:
-                similar = await search_galleries(kw, max_results=3, max_pages=1)
-                for r in similar:
-                    if r["url"] not in seen_urls:
-                        results.append(r)
-                        seen_urls.add(r["url"])
-
-    # 2. Hot keywords — parallel search across all sources
-    hot_kws = await get_hot_keywords(top_n=3)
-    tasks = []
-    # 4KHD
-    for kw in hot_kws:
-        tasks.append(search_galleries(kw, max_results=8, max_pages=1))
-    # XChina
-    for kw in hot_kws[:2]:
-        tasks.append(search_xchina(kw, max_results=8, max_pages=1))
-    # EH
+    # 1. EH first (fastest, no Cloudflare/proxy issues)
     if config.EH_MEMBER_ID:
-        from scraper_eh import search_ehentai
-        for kw in hot_kws[:1]:
-            tasks.append(search_ehentai(kw, max_results=5, max_pages=1))
-    # Parallel gather
-    gathered = await asyncio.gather(*tasks, return_exceptions=True)
-    for g in gathered:
-        if isinstance(g, list):
-            for r in g:
-                if r["url"] not in seen_urls:
-                    results.append(r)
-                    seen_urls.add(r["url"])
+        try:
+            from scraper_eh import search_ehentai
+            eh_results = await search_ehentai(kw, max_results=10, max_pages=1)
+            if eh_results:
+                logger.info(f"Random: EH returned {len(eh_results)} results")
+                return _random.choice(eh_results)
+        except Exception as e:
+            logger.warning(f"Random EH failed: {e}")
 
-    # 3. Prefer recent, fallback to all
-    recent = [r for r in results if _is_recent(r)]
-    pool = recent if len(recent) >= 3 else results  # need at least 3 recent to use that pool
+    # 2. XChina (curl_cffi, usually works)
+    try:
+        xc_results = await search_xchina(kw, max_results=15, max_pages=1)
+        if xc_results:
+            logger.info(f"Random: XC returned {len(xc_results)} results")
+            return _random.choice(xc_results)
+    except Exception as e:
+        logger.warning(f"Random XC failed: {e}")
 
-    if pool:
-        weighted = []
-        for r in pool:
-            async with _click_lock:
-                weight = gallery_clicks.get(r["url"], 0) + 1
-            weighted.extend([r] * min(weight, 5))
-        return _random.choice(weighted)
+    # 3. 4KHD fallback (slowest, may timeout from Railway)
+    try:
+        hd_results = await search_galleries(kw, max_results=20, max_pages=1)
+        if hd_results:
+            logger.info(f"Random: 4KHD returned {len(hd_results)} results")
+            return _random.choice(hd_results)
+    except Exception as e:
+        logger.warning(f"Random 4KHD failed: {e}")
 
-    # 4. Ultimate fallback — just 4KHD
-    results = await search_galleries("cosplay", max_results=30, max_pages=1)
-    if not results:
-        results = await search_galleries("", max_results=30, max_pages=1)
-    return _random.choice(results) if results else None
+    # Ultimate fallback
+    try:
+        results = await search_galleries("cosplay", max_results=30, max_pages=1)
+        if results:
+            return _random.choice(results)
+    except Exception:
+        pass
+
+    return None
 
 # ========== XChina.co ==========
 
