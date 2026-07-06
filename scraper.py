@@ -16,6 +16,94 @@ from proxy_pool import get_random_proxy
 
 logger = logging.getLogger(__name__)
 
+
+# ========== Random Gallery Pre-Cache ==========
+_pre_cache: list[dict] = []
+_pre_cache_lock = asyncio.Lock()
+_pre_cache_task: Optional[asyncio.Task] = None
+_PRE_CACHE_SIZE = 8
+_PRE_CACHE_TTL = 600  # 10 min
+
+async def _fill_pre_cache():
+    """Background task: keep pre-cache filled with random galleries."""
+    global _pre_cache
+    while True:
+        await asyncio.sleep(120)  # refill every 2 min
+        async with _pre_cache_lock:
+            if len(_pre_cache) >= _PRE_CACHE_SIZE:
+                continue
+        try:
+            # Try one gallery from each source
+            kw = random.choice(await get_hot_keywords(top_n=5)) if keyword_popularity else "cosplay"
+            gallery = None
+
+            # EH
+            if config.EH_MEMBER_ID:
+                try:
+                    from scraper_eh import search_ehentai
+                    eh = await search_ehentai(kw, max_results=5, max_pages=1)
+                    if eh:
+                        gallery = random.choice(eh)
+                except Exception:
+                    pass
+
+            # XChina
+            if not gallery:
+                try:
+                    xc = await search_xchina(kw, max_results=5, max_pages=1)
+                    if xc:
+                        gallery = random.choice(xc)
+                except Exception:
+                    pass
+
+            # 4KHD
+            if not gallery:
+                try:
+                    hd = await search_galleries(kw, max_results=5, max_pages=1)
+                    if hd:
+                        gallery = random.choice(hd)
+                except Exception:
+                    pass
+
+            if gallery:
+                async with _pre_cache_lock:
+                    _pre_cache.append(gallery)
+                    # Trim oldest if too many
+                    while len(_pre_cache) > _PRE_CACHE_SIZE:
+                        _pre_cache.pop(0)
+                    logger.info(f"Pre-cache: {len(_pre_cache)}/{_PRE_CACHE_SIZE} galleries ready")
+        except Exception as e:
+            logger.warning(f"Pre-cache fill error: {e}")
+
+
+async def pop_pre_cached() -> Optional[dict]:
+    """Pop one gallery from pre-cache. Returns None if empty."""
+    async with _pre_cache_lock:
+        if _pre_cache:
+            return _pre_cache.pop(0)
+    return None
+
+
+async def start_pre_cache():
+    """Start the background pre-cache task."""
+    global _pre_cache_task
+    if _pre_cache_task is not None:
+        return
+    _pre_cache_task = asyncio.create_task(_fill_pre_cache())
+    logger.info("Pre-cache background task started")
+
+
+async def stop_pre_cache():
+    """Stop the background pre-cache task."""
+    global _pre_cache_task
+    if _pre_cache_task:
+        _pre_cache_task.cancel()
+        try:
+            await _pre_cache_task
+        except asyncio.CancelledError:
+            pass
+        _pre_cache_task = None
+
 HEADERS = {"User-Agent": config.USER_AGENT}
 
 _httpx_client: Optional[httpx.AsyncClient] = None

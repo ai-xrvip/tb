@@ -31,6 +31,7 @@ from scraper import (
     search_galleries, get_gallery_images, get_random_gallery,
     download_image, track_click,
     search_xchina, get_xchina_gallery,
+    pop_pre_cached, start_pre_cache,
 )
 from proxy_pool import start_proxy_pool, stop_proxy_pool
 from scraper_eh import (
@@ -758,6 +759,16 @@ async def _handle_menu_random(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
     user_waiting_search.discard(user_id)
+
+    # Try pre-cache first (instant)
+    gallery = await pop_pre_cached()
+    if gallery:
+        logger.info(f"Random: served from pre-cache ({gallery.get('title','')[:30]})")
+        await query.edit_message_text("🎲 随机推荐来啦～")
+        await _send_gallery_detail(update, gallery["url"], from_random=True)
+        return
+
+    # Pre-cache empty - search live
     await query.edit_message_text("🎲 正在为你随机推荐...")
     try:
         gallery = await get_random_gallery()
@@ -768,8 +779,6 @@ async def _handle_menu_random(update, context):
         await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
         return
     await _send_gallery_detail(update, gallery["url"], from_random=True)
-
-
 async def _handle_menu_vip(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
@@ -1550,6 +1559,7 @@ def main():
             await app.initialize()
             await app.start()
             await start_proxy_pool()
+            await start_pre_cache()
             asyncio.create_task(_periodic_cleanup(app))
             await app.bot.set_webhook(url=config.WEBHOOK_URL + "/webhook")
             logger.info("Webhook set. Starting HTTP server...")
@@ -1587,6 +1597,7 @@ def main():
             await app.initialize()
             await app.start()
             await start_proxy_pool()
+            await start_pre_cache()
             asyncio.create_task(_periodic_cleanup(app))
             await app.updater.start_polling(allowed_updates=["message", "callback_query"])
             try:
