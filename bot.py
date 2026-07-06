@@ -254,11 +254,13 @@ def _parse_count_from_title(title):
 
 def _clean_title(title):
     """Clean title: remove size tags but preserve author/tag brackets."""
-    title = re.sub(r"\s*\[\d+[^\]]*(?:MB|GB|photos?|张)[^\]]*\]", "", title)
+    title = re.sub(r"\s*\[\d+[^\]]*(?:MB|GB|photos?|张|P\b)[^\]]*\]", "", title)
     title = re.sub(r"\s*f:[a-z ]+$", "", title)
-    # Normalize special dots to space (avoid garbled display in Telegram)
+    # Normalize dots + collapse spaces + strip trailing separators
     title = title.replace("·", " ").replace("•", " ").replace("・", " ")
-    return title.strip()
+    title = re.sub(r" {2,}", " ", title)
+    title = title.strip(" -|/\t\n\r")
+    return title
 
 
 def _is_vip(user_id):
@@ -1185,7 +1187,10 @@ async def _send_xchina_detail(update, url, author="", publish_date=""):
     final_date = detail.get("publish_date", "") or publish_date
 
     clean_title = _clean_title(title)
-    display_title = f"{final_author} - {clean_title}" if final_author else clean_title
+    # Remove common XChina noise patterns
+    clean_title = re.sub(r"\s*[-|]\s*XChina.*$", "", clean_title, flags=re.IGNORECASE)
+    clean_title = re.sub(r"\s*\([^)]*免费[^)]*\)", "", clean_title)
+    clean_title = clean_title.strip()
     text = f"\U0001f380 {html.escape(display_title)}"
     if count:
         text += f"\n\U0001f4f8 {count}P"
