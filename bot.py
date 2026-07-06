@@ -31,7 +31,7 @@ from scraper import (
     search_galleries, get_gallery_images, get_random_gallery,
     download_image, track_click,
     search_xchina, get_xchina_gallery,
-    pop_pre_cached, start_pre_cache, track_pre_served, track_pre_clicked, track_pre_skipped,
+    pop_pre_cached, start_pre_cache, track_pre_served, track_pre_clicked, track_pre_skipped, get_pre_cache_size,
 )
 from proxy_pool import start_proxy_pool, stop_proxy_pool
 from scraper_eh import (
@@ -772,13 +772,21 @@ async def _handle_menu_random(update, context):
         await _send_gallery_detail(update, gallery["url"], from_random=True)
         return
 
-    # Cache empty - no live fallback
-    await query.edit_message_text(
-        "😔 暂无推荐，缓存正在补货中，请稍后再试～",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
-        ]])
-    )
+    # Cache empty - live fallback (EH -> XC, skip 4KHD)
+    await query.edit_message_text("🎲 正在为你随机推荐...")
+    try:
+        gallery = await get_random_gallery()
+    except Exception:
+        gallery = None
+    if gallery:
+        await _send_gallery_detail(update, gallery["url"], from_random=True)
+    else:
+        await query.edit_message_text(
+            "😔 暂无推荐，请稍后再试～",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
+            ]])
+        )
 async def _handle_menu_vip(update, context):
     query = update.callback_query
     user_id = update.effective_user.id

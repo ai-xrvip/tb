@@ -1,113 +1,3 @@
-"""4KHD.com scraper - search galleries and extract images (async version)"""
-import re
-import asyncio
-import random
-import logging
-import urllib.parse
-from collections import defaultdict
-from io import BytesIO
-from typing import Optional, Any
-from datetime import datetime
-import httpx
-from curl_cffi import requests as curl_req
-from bs4 import BeautifulSoup
-from config import config
-from proxy_pool import get_random_proxy
-
-logger = logging.getLogger(__name__)
-
-
-# ========== Random Gallery Pre-Cache ==========
-_pre_cache: list[dict] = []
-_pre_cache_lock = asyncio.Lock()
-_pre_cache_task: Optional[asyncio.Task] = None
-_pre_skip_count: dict[str, int] = {}  # {url: skip_count}
-_pre_user_last: dict[int, str] = {}  # {user_id: last_served_url}
-_PRE_CACHE_SIZE = 15
-_PRE_CACHE_TTL = 36000  # 10 hours
-
-
-async def track_pre_served(user_id: int, gallery_url: str):
-    """Record that a gallery was served to a user from pre-cache."""
-    async with _pre_cache_lock:
-        _pre_user_last[user_id] = gallery_url
-
-
-async def track_pre_clicked(user_id: int):
-    """User clicked into the gallery detail — cancel pending skip."""
-    async with _pre_cache_lock:
-        if user_id in _pre_user_last:
-            del _pre_user_last[user_id]
-
-
-async def track_pre_skipped(user_id: int):
-    """User got another recommendation without clicking the previous one."""
-    async with _pre_cache_lock:
-        prev_url = _pre_user_last.pop(user_id, None)
-        if prev_url:
-            _pre_skip_count[prev_url] = _pre_skip_count.get(prev_url, 0) + 1
-            if _pre_skip_count[prev_url] >= 3:
-                # Remove from cache
-                for i, g in enumerate(_pre_cache):
-                    if g.get("url") == prev_url:
-                        _pre_cache.pop(i)
-                        logger.info(f"Pre-cache: removed {prev_url[:60]} (skipped by 3+ users)")
-                        break
-                del _pre_skip_count[prev_url]
-
-
-async def _fill_pre_cache():
-    """Background task: keep pre-cache filled with random galleries."""
-    global _pre_cache
-    while True:
-        await asyncio.sleep(14400)  # refill every 4 hours
-        async with _pre_cache_lock:
-            if len(_pre_cache) >= _PRE_CACHE_SIZE:
-                continue
-        try:
-            # Try one gallery from each source
-            kw = random.choice(await get_hot_keywords(top_n=5)) if keyword_popularity else "cosplay"
-            gallery = None
-
-            # EH
-            if config.EH_MEMBER_ID:
-                try:
-                    from scraper_eh import search_ehentai
-                    eh = await search_ehentai(kw, max_results=5, max_pages=1)
-                    if eh:
-                        gallery = random.choice(eh)
-                except Exception:
-                    pass
-
-            # XChina
-            if not gallery:
-                try:
-                    xc = await search_xchina(kw, max_results=5, max_pages=1)
-                    if xc:
-                        gallery = random.choice(xc)
-                except Exception:
-                    pass
-
-            # 4KHD
-            if not gallery:
-                try:
-                    hd = await search_galleries(kw, max_results=5, max_pages=1)
-                    if hd:
-                        gallery = random.choice(hd)
-                except Exception:
-                    pass
-
-            if gallery:
-                async with _pre_cache_lock:
-                    _pre_cache.append(gallery)
-                    # Trim oldest if too many
-                    while len(_pre_cache) > _PRE_CACHE_SIZE:
-                        _pre_cache.pop(0)
-                    logger.info(f"Pre-cache: {len(_pre_cache)}/{_PRE_CACHE_SIZE} galleries ready")
-        except Exception as e:
-            logger.warning(f"Pre-cache fill error: {e}")
-
-
 async def pop_pre_cached() -> Optional[dict]:
     """Pop one gallery from pre-cache. Returns None if empty."""
     async with _pre_cache_lock:
@@ -116,14 +6,25 @@ async def pop_pre_cached() -> Optional[dict]:
     return None
 
 
+async def get_pre_cache_size() -> int:
+    async with _pre_cache_lock:
+        return len(_pre_cache)
 async def start_pre_cache():
     """Start the background pre-cache task."""
     global _pre_cache_task
     if _pre_cache_task is not None:
         return
     _pre_cache_task = asyncio.create_task(_fill_pre_cache())
-    logger.info("Pre-cache background task started")
 
+    # Also start popular-gallery adder (every 2h)
+    async def _popular_adder():
+        await asyncio.sleep(600)  # wait 10min then start
+        while True:
+            await _add_popular_to_cache()
+            await asyncio.sleep(7200)  # every 2 hours
+    asyncio.create_task(_popular_adder())
+
+    logger.info("Pre-cache background task started")
 
 async def stop_pre_cache():
     """Stop the background pre-cache task."""
@@ -601,50 +502,32 @@ async def download_image(url: str, referer: str = config.BASE_URL) -> Optional[t
 
 
 async def get_random_gallery() -> Optional[dict]:
-    """Get a random gallery: EH first (fastest), then XChina, then 4KHD as fallback."""
+    """Get a random gallery: EH first, then XChina (4KHD skipped due to server issues)."""
     import random as _random
 
-    # Pick a hot keyword
     hot_kws = await get_hot_keywords(top_n=5)
     kw = _random.choice(hot_kws) if hot_kws else "cosplay"
-    logger.info(f"Random: using keyword={kw!r}")
+    logger.info(f"Random live: keyword={kw!r}")
 
-    # 1. EH first (fastest, no Cloudflare/proxy issues)
+    # 1. EH first (fastest)
     if config.EH_MEMBER_ID:
         try:
             from scraper_eh import search_ehentai
             eh_results = await search_ehentai(kw, max_results=10, max_pages=1)
             if eh_results:
-                logger.info(f"Random: EH returned {len(eh_results)} results")
+                logger.info(f"Random live: EH returned {len(eh_results)}")
                 return _random.choice(eh_results)
         except Exception as e:
             logger.warning(f"Random EH failed: {e}")
 
-    # 2. XChina (curl_cffi, usually works)
+    # 2. XChina
     try:
         xc_results = await search_xchina(kw, max_results=15, max_pages=1)
         if xc_results:
-            logger.info(f"Random: XC returned {len(xc_results)} results")
+            logger.info(f"Random live: XC returned {len(xc_results)}")
             return _random.choice(xc_results)
     except Exception as e:
         logger.warning(f"Random XC failed: {e}")
-
-    # 3. 4KHD fallback (slowest, may timeout from Railway)
-    try:
-        hd_results = await search_galleries(kw, max_results=20, max_pages=1)
-        if hd_results:
-            logger.info(f"Random: 4KHD returned {len(hd_results)} results")
-            return _random.choice(hd_results)
-    except Exception as e:
-        logger.warning(f"Random 4KHD failed: {e}")
-
-    # Ultimate fallback
-    try:
-        results = await search_galleries("cosplay", max_results=30, max_pages=1)
-        if results:
-            return _random.choice(results)
-    except Exception:
-        pass
 
     return None
 
