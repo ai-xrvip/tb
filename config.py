@@ -22,7 +22,7 @@ class Config:
     SEARCH_URL: str = "https://www.4khd.com/?s={keyword}"
 
     # HTTP
-    REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "15"))
+    REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "8"))
 
     # Webhook (leave empty for polling mode)
     WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")

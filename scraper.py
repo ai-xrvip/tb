@@ -173,7 +173,7 @@ async def _get_proxy_client(proxy_url: str) -> httpx.AsyncClient:
         return client
 
 
-async def _fetch(url: str, retries: int = 2) -> Optional[str]:
+async def _fetch(url: str, retries: int = 1) -> Optional[str]:
     """Async HTTP GET, returns response text."""
     proxy_url = get_random_proxy() if "4khd.com" in url else None
     for attempt in range(retries):
