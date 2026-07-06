@@ -256,6 +256,8 @@ def _clean_title(title):
     """Clean title: remove size tags but preserve author/tag brackets."""
     title = re.sub(r"\s*\[\d+[^\]]*(?:MB|GB|photos?|张)[^\]]*\]", "", title)
     title = re.sub(r"\s*f:[a-z ]+$", "", title)
+    # Normalize special dots to space (avoid garbled display in Telegram)
+    title = title.replace("·", " ").replace("•", " ").replace("・", " ")
     return title.strip()
 
 
@@ -1135,7 +1137,7 @@ async def _show_results_page(msg_or_query, user_id):
         text += f"{idx}. {source_badge} {html.escape(display_title)}\n"
         author_name = r.get("author", "")
         btn_label = author_name if author_name else clean_title
-        btn_label = btn_label[:20] + ".." if len(btn_label) > 22 else btn_label[:22]
+        btn_label = btn_label[:32] + ".." if len(btn_label) > 35 else btn_label[:35]
         author = r.get("author", "")
         publish_date = r.get("publish_date", "")
         url_key = await _store_url(r["url"], author=author, publish_date=publish_date)
