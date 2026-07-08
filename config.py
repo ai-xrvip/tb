@@ -21,8 +21,14 @@ class Config:
     BASE_URL: str = "https://www.4khd.com"
     SEARCH_URL: str = "https://www.4khd.com/?s={keyword}"
 
-    # HTTP
+    # HTTP — per-source timeouts (seconds)
     REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "8"))
+    SEARCH_TIMEOUT_4KHD: float = float(os.getenv("SEARCH_TIMEOUT_4KHD", "8.0"))
+    SEARCH_TIMEOUT_XC: float = float(os.getenv("SEARCH_TIMEOUT_XC", "6.0"))
+    SEARCH_TIMEOUT_EH: float = float(os.getenv("SEARCH_TIMEOUT_EH", "12.0"))
+
+    # Proxy pool (set PROXY_ENABLED=false to skip free proxies)
+    PROXY_ENABLED: bool = os.getenv("PROXY_ENABLED", "true").lower() in ("true", "1", "yes")
 
     # Webhook (leave empty for polling mode)
     WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")
@@ -63,7 +69,7 @@ class Config:
         elif "your-" in cls.BOT_TOKEN.lower() or "placeholder" in cls.BOT_TOKEN.lower():
             errors.append("BOT_TOKEN looks like a placeholder")
         if not cls.ADMIN_IDS:
-            errors.append("ADMIN_IDS is empty — bot will have no admin access")
+            errors.append("ADMIN_IDS is empty")
         return errors
 
 config = Config()
