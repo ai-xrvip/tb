@@ -1,7 +1,7 @@
-"""handlers_menu.py �?Menu handlers and inline query handler."""
+"""handlers_menu.py — Menu handlers and inline query handler."""
 from bot_utils import (
     now_ts, store_url, get_url, clean_title, parse_count_from_title,
-    is_vip, user_waiting_search, user_waiting_card, send_or_edit, safe_search_wrapper, PURCHASE_URL,
+    is_vip, user_waiting_search, send_or_edit, safe_search_wrapper, PURCHASE_URL,
     START_TEXT, START_KEYBOARD, VIP_TEXT,
     build_hot_keyword_keyboard,
 )
@@ -21,10 +21,10 @@ async def _handle_menu_search(update, context):
     user_id = update.effective_user.id
     user_waiting_search.add(user_id)
     keyboard = await build_hot_keyword_keyboard([
-        [InlineKeyboardButton("🏠 返回主菜�?, callback_data="menu_home")],
+        [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")],
     ], user_id=user_id)
     await query.edit_message_text(
-        "🔍 请直接输入搜索关键词～\n\n🔥 <b>热门搜索�?/b>",
+        "🔍 请直接输入搜索关键词～\n\n🔥 <b>热门搜索：</b>",
         parse_mode="HTML",
         reply_markup=keyboard)
 
@@ -47,10 +47,10 @@ async def _handle_random_next(update, context):
     try:
         gallery = await get_random_gallery()
     except Exception:
-        await send_or_edit(msg, "😔 获取随机推荐失败，请稍后再试�?)
+        await send_or_edit(msg, "😔 获取随机推荐失败，请稍后再试。")
         return
     if not gallery:
-        await send_or_edit(msg, "😔 获取随机推荐失败，请稍后再试�?)
+        await send_or_edit(msg, "😔 获取随机推荐失败，请稍后再试。")
         return
     await msg.delete()
     await _route_random_gallery(update, gallery)
@@ -63,10 +63,10 @@ async def _handle_menu_random(update, context):
     try:
         gallery = await get_random_gallery()
     except Exception:
-        await query.edit_message_text("😔 获取随机推荐失败，请稍后再试�?)
+        await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
         return
     if not gallery:
-        await query.edit_message_text("😔 获取随机推荐失败，请稍后再试�?)
+        await query.edit_message_text("😔 获取随机推荐失败，请稍后再试。")
         return
     await _route_random_gallery(update, gallery)
 
@@ -78,15 +78,15 @@ async def _handle_menu_vip(update, context):
             "<b>👑 你已是VIP会员</b>\n\n🎉 享受所有特权～",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 返回主菜�?, callback_data="menu_home")
+                InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
             ]]))
         return
     await query.edit_message_text(VIP_TEXT, parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔑 输入卡密激�?, callback_data="vip_activate")],
+            [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
             [InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)],
             [InlineKeyboardButton("🔗 邀请好友得VIP", callback_data="invite_info")],
-            [InlineKeyboardButton("🏠 返回主菜�?, callback_data="menu_home")]
+            [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
         ]))
 
 async def _handle_menu_home(update, context):
@@ -106,15 +106,15 @@ async def _handle_menu_home(update, context):
 # ========== Inline Query Handler ==========
 
 async def handle_inline(update, context):
-    """Handle inline queries �?search from any chat using @botname keyword."""
+    """Handle inline queries — search from any chat using @botname keyword."""
     query = update.inline_query
     keyword = query.query.strip()
     if not keyword or len(keyword) < 2:
-        await query.answer([], switch_pm_text="输入关键词搜索图�?, switch_pm_parameter="start")
+        await query.answer([], switch_pm_text="输入关键词搜索图集", switch_pm_parameter="start")
         return
 
     results = []
-    # Quick search: 4KHD + XC only (skip EH for inline �?too slow)
+    # Quick search: 4KHD + XC only (skip EH for inline — too slow)
     try:
         hd_task = asyncio.create_task(safe_search_wrapper("4KHD", search_galleries(keyword, max_results=5)))
         xc_task = asyncio.create_task(safe_search_wrapper("XChina", search_xchina(keyword, max_results=5)))
