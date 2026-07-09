@@ -144,10 +144,9 @@ PURCHASE_URL: str = "https://t.me/xiuren88bot?start=buy_524"
 from bot_context import get_ctx as _get_ctx
 
 def sync_from_context() -> None:
-    ctx = _get_ctx()
-    globals()['VIP_USERS'] = ctx.vip_users
-    globals()['ALL_USERS'] = ctx.all_users
-    globals()['INVITES'] = ctx.invites
+    """DEPRECATED: This function breaks the shared reference between modules.
+    Do NOT call it. _load_data() now operates directly on bot_utils globals."""
+    pass
 
 
 
