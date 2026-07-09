@@ -87,8 +87,8 @@ async def _periodic_cleanup(application):
                             reply_markup=InlineKeyboardMarkup([[
                                 InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)
                             ]]))
-    except Exception as e:
-        logger.debug("VIP reminder send failed for user %s: %s", uid, e)
+                    except Exception as e:
+                        logger.debug("VIP reminder send failed for user %s: %s", uid, e)
 
 # ========== Startup ==========
 

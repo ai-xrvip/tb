@@ -1,4 +1,4 @@
-﻿"""Configuration for 4KHD Search Bot"""
+"""Configuration for 4KHD Search Bot"""
 import os
 from pathlib import Path
 from dotenv import load_dotenv

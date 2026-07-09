@@ -2,6 +2,8 @@ FROM python:3.11.11-slim
 
 WORKDIR /app
 
+ENV PYTHONUNBUFFERED=1
+
 # Create non-root user
 RUN groupadd -r botuser && useradd -r -g botuser botuser && mkdir -p /app/data && chown botuser:botuser /app/data
 
