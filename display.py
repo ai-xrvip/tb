@@ -93,9 +93,6 @@ async def _send_xchina_detail(update, url, author="", publish_date="", from_rand
     text = f"🎀 {html.escape(display_title)}"
     if count: text += f"\n📸 {count}P"
     if final_date: text += f"\n🕐 {final_date}"
-    # 只有在非随机推荐（从搜索结果点进来）时才显示原链接
-    if not from_random:
-        text += f"\n🔗 {html.escape(url)}"
     url_key = await store_url(url, title=display_title, source="xchina")
     buttons = []
     if images:
@@ -143,9 +140,6 @@ async def _send_eh_detail(update, url, publish_date="", from_random=False):
     if count: text += f"\n📸 {count}P"
     if publish_date: text += f"\n🕐 {publish_date}"
     if tags: text += "\n🏷 " + ", ".join(tags[:8])
-    # 只有在非随机推荐（从搜索结果点进来）时才显示原链接
-    if not from_random:
-        text += f"\n🔗 {html.escape(url)}"
     url_key = await store_url(url, title=clean_title_str, source="ehentai")
     buttons = []
     if images:
@@ -206,9 +200,6 @@ async def _send_gallery_detail(update, url, gallery_data=None, from_random=False
     clean_title_str = clean_title(title)
     text = f"🎀 {html.escape(clean_title_str)}\n📸 {display_count}张"
     if publish_date: text += f"\n🕐 {publish_date}"
-    # 只有在非随机推荐（从搜索结果点进来）时才显示原链接
-    if not from_random:
-        text += f"\n🔗 {html.escape(url)}"
     url_key = await store_url(url, title=clean_title_str, source="4khd")
     buttons = [[InlineKeyboardButton("🖼️ 查看完整图集", callback_data="f_" + url_key)]]
     if from_random:

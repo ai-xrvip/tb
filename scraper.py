@@ -649,12 +649,10 @@ async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 
     seen_urls = set()
 
     for page in range(1, max_pages + 1):
-        if page == 1:
-            url = search_url
-        elif keyword.strip():
-            url = f"{XC_BASE}/photos/keyword-{urllib.parse.quote(keyword)}.html?page={page}"
-        else:
-            url = f"{XC_BASE}/photos.html?page={page}"
+        url = search_url if page == 1 else f"{XC_BASE}/photos.html?page={page}"
+        if page > 1 and keyword.strip():
+            # XChina keyword-search pages don't support ?page= — skip pagination
+            break
 
         text = await _xc_fetch(url)
         if not text:

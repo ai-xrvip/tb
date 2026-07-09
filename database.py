@@ -457,7 +457,7 @@ async def db_add_search_history(user_id: int, keyword: str):
 
 async def db_get_user_history(user_id: int, limit: int = 6) -> list[str]:
     rows = await _fetch_all(
-        "SELECT DISTINCT keyword FROM search_history WHERE user_id = ? ORDER BY MAX(searched_at) DESC LIMIT ?",
+        "SELECT keyword, MAX(searched_at) AS last_search FROM search_history WHERE user_id = ? GROUP BY keyword ORDER BY last_search DESC LIMIT ?",
         (user_id, limit),
     )
     return [r["keyword"] for r in rows]
