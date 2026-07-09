@@ -61,6 +61,12 @@ class Config:
         int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()
     }
 
+    # Database path
+    DB_PATH: str = os.getenv("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "bot.db"))
+
+    # Web admin dashboard token
+    ADMIN_WEB_TOKEN: str = os.getenv("ADMIN_WEB_TOKEN", "")
+
     @classmethod
     def validate(cls) -> list[str]:
         errors = []

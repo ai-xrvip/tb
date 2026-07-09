@@ -151,35 +151,36 @@ async def _vip_daily_push(application):
                 wait_secs += 86400
             await asyncio.sleep(wait_secs)
 
-            # Get recent galleries
+            # Get recent galleries \u2014 build diverse pool per VIP user
             from scraper import search_xchina, get_hot_keywords
-            candidates = []
-            kws = await get_hot_keywords(top_n=3)
+            kws = await get_hot_keywords(top_n=5)
+            candidates_pool = []
             for kw in kws:
                 try:
                     xc = await search_xchina(kw, max_results=3, max_pages=1)
-                    candidates.extend(xc)
-                except Exception: pass
-            if not candidates:
+                    candidates_pool.extend(xc)
+                except Exception as e:
+                    logger.warning("VIP push search_xchina failed for kw=%s: %s", kw, e)
+            if not candidates_pool:
                 continue
 
             import random as _rand
-            picks = _rand.sample(candidates, min(3, len(candidates)))
 
             for uid in list(VIP_USERS.keys()):
                 try:
-                    pick = _rand.choice(picks)
+                    # Each user gets a random pick from the pool so content is diverse
+                    pick = _rand.choice(candidates_pool)
                     await application.bot.send_message(
                         chat_id=uid,
-                        text=f'\U0001f4ec <b>VIP\u6bcf\u65e5\u7cbe\u9009</b>\n\n{pick["title"]}\n\n\u70b9\u51fb\u67e5\u770b\u8be6\u60c5 \u2192',
+                        text='\ud83d\udcec <b>VIP\u6bcf\u65e5\u7cbe\u9009</b>\n\n' + pick["title"] + '\n\n\u70b9\u51fb\u67e5\u770b\u8be6\u60c5 \u2192',
                         parse_mode="HTML",
                         reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("\U0001f440 \u67e5\u770b\u8be6\u60c5", callback_data=f"x_{await store_url(pick['url'], source='xchina')}")
+                            InlineKeyboardButton("\ud83d\udc40 \u67e5\u770b\u8be6\u60c5", callback_data=f"x_{await store_url(pick['url'], source='xchina')}")
                         ]])
                     )
-                except Exception:
-                    pass
-                await asyncio.sleep(1)
+                except Exception as e:
+                    logger.debug("VIP push send failed for user %s: %s", uid, e)
+                await asyncio.sleep(0.5)
         except Exception as e:
             logger.error(f"VIP push error: {e}")
         await asyncio.sleep(3600)
@@ -193,7 +194,8 @@ async def error_handler(update, context):
     if update and isinstance(update, type(update)) and getattr(update, 'effective_message', None):
         try:
             await update.effective_message.reply_text("\u274c \u51fa\u9519\u4e86\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002")
-        except Exception: pass
+        except Exception:
+            logger.debug("Failed to reply to user in error_handler (maybe deleted message)")
 
 # ========== Database Backup ==========
 

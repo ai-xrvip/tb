@@ -1,7 +1,8 @@
 """handlers_menu.py — Menu handlers and inline query handler."""
 from bot_utils import (
     now_ts, store_url, get_url, clean_title, parse_count_from_title,
-    is_vip, user_waiting_search, START_TEXT, START_KEYBOARD, VIP_TEXT,
+    is_vip, user_waiting_search, send_or_edit, safe_search_wrapper, PURCHASE_URL,
+    START_TEXT, START_KEYBOARD, VIP_TEXT,
     build_hot_keyword_keyboard,
 )
 from display import _show_results_page, _send_xchina_detail, _send_eh_detail, _send_gallery_detail
@@ -96,8 +97,10 @@ async def _handle_menu_home(update, context):
     try:
         await query.edit_message_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     except Exception:
+        logger.debug("_handle_menu_home: edit failed, trying delete")
         try: await query.delete_message()
-        except Exception: pass
+        except Exception:
+            logger.debug("_handle_menu_home: delete also failed")
         await query.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
 
 # ========== Inline Query Handler ==========

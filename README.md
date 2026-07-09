@@ -41,11 +41,13 @@ EH cookies can be extracted from your browser after logging into e-hentai.org.
 
 ```bash
 pip install -r requirements.txt
-python bot.py
+cp .env.example .env
+# Edit .env with your BOT_TOKEN and ADMIN_IDS
+python main.py
 ```
 
 The bot starts in **polling mode** by default (no webhook URL set).  
-It also starts a health-check HTTP server on port 8000.
+Flask admin dashboard at `http://localhost:8000/admin`.
 
 ### 4. Deploy to Railway
 
@@ -96,13 +98,18 @@ It also starts a health-check HTTP server on port 8000.
 ## Architecture
 
 ```
-bot.py          — Main Telegram bot (commands, callbacks, inline queries)
-scraper.py      — 4KHD.com + XChina.co scraping (httpx + curl_cffi)
-scraper_eh.py   — E-Hentai scraping (cookies-auth, magnet links)
-database.py     — SQLite WAL-mode database layer (async via ThreadPoolExecutor)
-pre_cache.py    — Background recommendation pool (20 entries, 3-platform)
-proxy_pool.py   — Optional free proxy pool (can be disabled)
-config.py       — Environment-based configuration
+main.py          — Application entry point (wires all modules + SQLite + Flask admin)
+handlers_*.py    — Command, callback, text, menu, search, subscription handlers
+display.py       — Gallery detail display (search results, pagination, full images)
+scraper.py       — 4KHD.com + XChina.co scraping (httpx + curl_cffi with fallback)
+scraper_eh.py    — E-Hentai scraping (cookies-auth, magnet links via bencode parser)
+database.py      — SQLite WAL-mode database layer (async via ThreadPoolExecutor)
+pre_cache.py     — Background recommendation pool (20 entries, 3-platform)
+proxy_pool.py    — Free proxy pool manager (auto-refresh, full validation)
+bot_utils.py     — Shared constants, helpers, locks, VIP/user state
+bot_context.py   — Typed dataclass for all mutable runtime state
+config.py        — Environment-based configuration
+web_admin.py     — Flask admin dashboard (stats, trends, DB health)
 ```
 
 ## Data

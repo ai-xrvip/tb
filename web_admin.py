@@ -30,7 +30,7 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
-ADMIN_WEB_TOKEN: str = os.getenv("ADMIN_WEB_TOKEN", "")
+ADMIN_WEB_TOKEN: str = config.ADMIN_WEB_TOKEN
 DB_PATH: str = config.DB_PATH
 
 app = Flask(__name__, template_folder=None)

@@ -65,7 +65,7 @@ async def _validate_pool(proxies: list[str], max_workers: int = 20) -> list[str]
                 return p
         return None
 
-    tasks = [validate_one(p) for p in proxies[:30]]
+    tasks = [validate_one(p) for p in proxies]
     results = await asyncio.gather(*tasks)
     return [r for r in results if r is not None]
 

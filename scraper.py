@@ -168,7 +168,8 @@ async def _get_proxy_client(proxy_url: str) -> httpx.AsyncClient:
 
 
 async def _fetch(url: str, retries: int = 2) -> Optional[str]:
-    """Async HTTP GET, returns response text."""
+    """Async HTTP GET, returns response text.
+    Uses proxy pool if available, falls back to direct connection if pool is empty."""
     proxy_url = get_random_proxy() if "4khd.com" in url else None
     for attempt in range(retries):
         try:
@@ -536,9 +537,11 @@ XC_HEADERS = {
 _xc_sem = asyncio.Semaphore(2)
 
 async def _xc_fetch(url: str, retries: int = 2) -> str | None:
-    """Fetch xchina.co page with curl_cffi to bypass Cloudflare."""
+    """Fetch xchina.co page with curl_cffi to bypass Cloudflare.
+    Falls back to httpx+standard headers if curl_cffi fails."""
     async with _xc_sem:
         await asyncio.sleep(random.uniform(0.5, 1.5))
+    # Try curl_cffi first (Cloudflare bypass)
     for attempt in range(retries):
         try:
             r = await asyncio.to_thread(
@@ -550,11 +553,25 @@ async def _xc_fetch(url: str, retries: int = 2) -> str | None:
             )
             if r.status_code == 200:
                 return r.text
-            logger.warning(f"XC HTTP {r.status_code} for {url[:60]} (attempt {attempt+1})")
+            logger.warning(f"XC curl_cffi HTTP {r.status_code} for {url[:60]} (attempt {attempt+1})")
             await asyncio.sleep(1)
         except Exception as e:
-            logger.warning(f"XC fetch error {url[:60]}: {e}")
+            logger.warning(f"XC curl_cffi error {url[:60]}: {e}")
             await asyncio.sleep(1)
+    # Fallback to httpx (works when Cloudflare is relaxed or IP is trusted)
+    logger.info("XC curl_cffi failed, falling back to httpx for %s", url[:60])
+    try:
+        async with httpx.AsyncClient(
+            headers=XC_HEADERS,
+            timeout=httpx.Timeout(15),
+            follow_redirects=True,
+        ) as client:
+            r = await client.get(url)
+            if r.status_code == 200:
+                return r.text
+            logger.warning(f"XC httpx fallback HTTP {r.status_code} for {url[:60]}")
+    except Exception as e:
+        logger.warning(f"XC httpx fallback error {url[:60]}: {e}")
     return None
 
 

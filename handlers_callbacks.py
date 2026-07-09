@@ -19,6 +19,7 @@ from database import (
     db_load_cards, db_save_card, db_activate_card,
     db_card_count_used, db_card_count_total,
     db_list_unused_cards, db_save_invite, db_add_favorite, db_get_favorites,
+    db_delete_favorite, db_clear_favorites,
 )
 from scraper_eh import get_eh_magnet
 import asyncio, html, logging, re, secrets, string, traceback
@@ -74,11 +75,11 @@ async def handle_callback(update, context):
         # No route matched
         logger.warning(f"Unhandled callback data: {data}")
     except Exception as e:
-        logger.error(f"Callback error: {traceback.format_exc()}")
+        logger.warning(f"Callback error: {traceback.format_exc()}")
         try:
             await query.edit_message_text("操作失败，请重试。")
         except Exception:
-            pass
+            logger.debug("callback error handler: failed to reply")
 
 # ═══════════════════════════════════════════════════════════════
 #  Exact-match routes
@@ -363,7 +364,8 @@ async def _route_detail_4khd(update, context):
     loading = await query.message.reply_text("⏳ 正在获取图集详情，请稍候...")
     await _send_gallery_detail(update, url)
     try: await loading.delete()
-    except Exception: pass
+    except Exception:
+        logger.debug("loading msg already deleted")
 
 @_prefix("x_")
 async def _route_detail_xchina(update, context):
@@ -376,7 +378,8 @@ async def _route_detail_xchina(update, context):
     entry = url_store.get(query.data[2:], {})
     await _send_xchina_detail(update, url, author=entry.get("author", ""), publish_date=entry.get("publish_date", ""))
     try: await loading.delete()
-    except Exception: pass
+    except Exception:
+        logger.debug("loading msg already deleted")
 
 @_prefix("e_")
 async def _route_detail_eh(update, context):
@@ -388,7 +391,8 @@ async def _route_detail_eh(update, context):
     loading = await query.message.reply_text("⏳ 正在获取图集详情，请稍候...")
     await _send_eh_detail(update, url)
     try: await loading.delete()
-    except Exception: pass
+    except Exception:
+        logger.debug("loading msg already deleted")
 
 @_prefix("m_")
 async def _route_magnet(update, context):
@@ -411,7 +415,7 @@ async def _route_magnet(update, context):
             else:
                 await status_msg.edit_text("❌ 该图集暂无磁力链接")
         except Exception:
-            pass
+            logger.debug("magnet status msg edit failed (msg may be deleted)")
     asyncio.create_task(_bg_magnet())
 
 # Favorites (prefix "fav_")
@@ -438,17 +442,54 @@ async def _route_fav_list(update, context):
         await query.edit_message_text("\u2b50 <b>\u6536\u85cf\u5939</b>\n\n\u8fd8\u6ca1\u6709\u6536\u85cf\u4efb\u4f55\u56fe\u96c6\u54e6\uff5e",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")
+                InlineKeyboardButton("\ud83c\udfe0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")
             ]]))
     else:
         fav_text = "\u2b50 <b>\u6536\u85cf\u5939</b>\n\n"
         fav_buttons = []
         for i, f in enumerate(favs):
             fav_text += f"{i+1}. {html.escape(f['title'][:40])}\n"
-            fav_buttons.append([InlineKeyboardButton(f"{i+1}. {f['title'][:35]}", url=f['url'], callback_data="noop")])
-        fav_buttons.append([InlineKeyboardButton("\U0001f3e0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home")])
+            # \u4f7f\u7528\u56de\u8c03\u6253\u5f00\u800c\u975e\u5916\u94fe\uff0c\u8fd9\u6837\u80fd\u8d70 bot \u5185\u90e8\u8def\u7531\u770b\u5230\u539f\u94fe\u63a5
+            source_prefix = "e_" if f['source'] == "ehentai" else ("x_" if f['source'] == "xchina" else "d_")
+            url_key = await store_url(f['url'], title=f['title'], source=f['source'])
+            fav_buttons.append([
+                InlineKeyboardButton(f"{i+1}. {f['title'][:30]}", callback_data=source_prefix + url_key),
+                InlineKeyboardButton("\u274c", callback_data=f"fav_del_{i}"),
+            ])
+        fav_buttons.append([
+            InlineKeyboardButton("\ud83d\uddd1 \u6e05\u7a7a\u6536\u85cf", callback_data="fav_clear"),
+            InlineKeyboardButton("\ud83c\udfe0 \u8fd4\u56de\u4e3b\u83dc\u5355", callback_data="menu_home"),
+        ])
         await query.edit_message_text(fav_text, parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(fav_buttons))
+
+@_prefix("fav_del_")
+async def _route_fav_del(update, context):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    idx_str = query.data[8:]
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await query.answer("\u64cd\u4f5c\u5931\u8d25", show_alert=True)
+        return
+    favs = await db_get_favorites(user_id)
+    if idx < 0 or idx >= len(favs):
+        await query.answer("\u8be5\u6536\u85cf\u5df2\u4e0d\u5b58\u5728", show_alert=True)
+        return
+    target = favs[idx]
+    await db_delete_favorite(user_id, target['url'])
+    await query.answer("\u5df2\u5220\u9664\u8be5\u6536\u85cf", show_alert=True)
+    # \u5237\u65b0\u6536\u85cf\u5217\u8868
+    await _route_fav_list(update, context)
+
+@_prefix("fav_clear")
+async def _route_fav_clear(update, context):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    deleted = await db_clear_favorites(user_id)
+    await query.answer(f"\u5df2\u6e05\u7a7a {deleted} \u4e2a\u6536\u85cf", show_alert=True)
+    await _route_fav_list(update, context)
 @_prefix("f_")
 async def _route_full_gallery(update, context):
     query = update.callback_query
@@ -459,7 +500,8 @@ async def _route_full_gallery(update, context):
     loading = await query.message.reply_text("⏳ 正在加载图片，请稍候...")
     await _send_gallery_full(update, url)
     try: await loading.delete()
-    except Exception: pass
+    except Exception:
+        logger.debug("loading msg already deleted")
 
 @_prefix("g_")
 async def _route_gallery_page(update, context):
@@ -486,5 +528,6 @@ async def _route_gallery_page(update, context):
     loading = await query.message.reply_text(f"\u23f3 \u6b63\u5728\u52a0\u8f7d\u7b2c{page+1}\u9875\uff0c\u8bf7\u7a0d\u5019...")
     await _send_gallery_page(update, url, page)
     try: await loading.delete()
-    except Exception: pass
+    except Exception:
+        logger.debug("loading msg already deleted")
 

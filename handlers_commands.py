@@ -1,10 +1,12 @@
 """handlers_commands.py — Command handlers (start, search, admin, vip, etc.)."""
 from bot_utils import (
     now_ts, store_url, get_url, clean_title, parse_count_from_title,
-    is_vip, user_waiting_search, user_waiting_card, ALL_USERS, VIP_USERS,
+    is_vip, send_or_edit, user_waiting_search, user_waiting_card,
+    ALL_USERS, VIP_USERS,
     INVITES, ADMIN_IDS, START_TEXT, START_KEYBOARD, VIP_TEXT,
     PURCHASE_URL, _ONE_DAY, MENU_KEYBOARD,
-    save_vip_db, save_invite_db, build_hot_keyword_keyboard,
+    save_vip_db, save_invite_db, load_vip_db, build_hot_keyword_keyboard,
+    get_invite_lock,
 )
 from handlers_search import _do_search, _do_search_callback
 from handlers_menu import _route_random_gallery
@@ -12,7 +14,8 @@ from config import config
 from database import (
     db_add_user, db_bump_stat, db_save_vip, db_card_count_used, db_card_count_total,
     db_vip_count, db_vip_permanent_count, db_user_count,
-    db_get_stats_last_days,
+    db_get_stats_last_days, db_get_user_history,
+    db_delete_expired_vip,
     db_load_cards, db_activate_card,
 )
 import asyncio, html, logging, re, secrets, string, traceback
@@ -33,25 +36,26 @@ async def cmd_start(update, context):
         # Check invite: if started with /start INVITE_CODE, grant reward
         if context.args:
             code = context.args[0]
-            inviter = INVITES.get(code)
-            if inviter and int(inviter) != user_id:
-                # Grant 1 day VIP to inviter
-                existing = VIP_USERS.get(int(inviter))
-                if existing is not None:
-                    VIP_USERS[int(inviter)] = max(existing or now_ts(), now_ts()) + _ONE_DAY
-                else:
-                    if is_vip(int(inviter)):
-                        VIP_USERS[int(inviter)] = max(VIP_USERS.get(int(inviter), now_ts()), now_ts()) + _ONE_DAY
+            async with get_invite_lock():
+                inviter = INVITES.get(code)
+                if inviter and int(inviter) != user_id:
+                    # Grant 1 day VIP to inviter
+                    existing = VIP_USERS.get(int(inviter))
+                    if existing is not None:
+                        VIP_USERS[int(inviter)] = max(existing or now_ts(), now_ts()) + _ONE_DAY
                     else:
-                        VIP_USERS[int(inviter)] = now_ts() + _ONE_DAY
-                asyncio.create_task(db_save_vip(int(inviter), VIP_USERS[int(inviter)]))
-                try:
-                    await context.bot.send_message(
-                        chat_id=int(inviter),
-                        text=f"🎉 恭喜！你邀请的用户已加入～\nVIP 已延长 1 天！"
-                    )
-                except Exception:
-                    pass
+                        if is_vip(int(inviter)):
+                            VIP_USERS[int(inviter)] = max(VIP_USERS.get(int(inviter), now_ts()), now_ts()) + _ONE_DAY
+                        else:
+                            VIP_USERS[int(inviter)] = now_ts() + _ONE_DAY
+                    asyncio.create_task(db_save_vip(int(inviter), VIP_USERS[int(inviter)]))
+                    try:
+                        await context.bot.send_message(
+                            chat_id=int(inviter),
+                            text=f"🎉 恭喜！你邀请的用户已加入～\nVIP 已延长 1 天！"
+                        )
+                    except Exception:
+                        pass
     await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
 
@@ -96,7 +100,8 @@ async def cmd_admin(update, context):
             await update.message.reply_text("用户ID必须是数字")
         return
 
-    load_vip_db()
+    VIP_USERS.clear()
+    VIP_USERS.update(await load_vip_db())
     now = now_ts()
     expired = [uid for uid, exp in list(VIP_USERS.items()) if exp is not None and now > exp]
     for uid in expired:

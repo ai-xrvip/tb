@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import sqlite3
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -134,6 +135,7 @@ def _init_db(path: str):
 
 def _conn() -> sqlite3.Connection:
     """Get a thread-local connection (created lazily per thread)."""
+    assert _local is not None, "Database not initialized; call start_database() first"
     conn = getattr(_local, "conn", None)
     if conn is None:
         conn = sqlite3.connect(_db_path, check_same_thread=False)
@@ -142,7 +144,7 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
-_local = None  # will be a threading.local once db is initialized
+_local: threading.local | None = None  # will be a threading.local once db is initialized
 
 
 async def _run(fn, *args, **kwargs):
@@ -205,10 +207,11 @@ async def _exec_many(sql: str, seq):
 
 async def start_database():
     global _db_executor, _db_path, _local
-    import threading
     _local = threading.local()
     _db_path = config.DB_PATH
     _db_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="db")
+    # Ensure data directory exists
+    Path(_db_path).parent.mkdir(parents=True, exist_ok=True)
     # Initialise the database on the executor thread
     await asyncio.get_running_loop().run_in_executor(_db_executor, _init_db, _db_path)
     _db_ready.set()
@@ -402,6 +405,19 @@ async def db_get_favorites(user_id: int) -> list[dict]:
     )
 
 
+async def db_delete_favorite(user_id: int, url: str) -> bool:
+    """Delete one favorite entry by url. Returns True if any row was deleted."""
+    return bool(await _exec_rowcount(
+        "DELETE FROM favorites WHERE user_id=? AND url=?",
+        (user_id, url),
+    ))
+
+
+async def db_clear_favorites(user_id: int) -> int:
+    """Clear all favorites for a user. Returns number of deleted rows."""
+    return await _exec_rowcount("DELETE FROM favorites WHERE user_id=?", (user_id,))
+
+
 # ---------------------------------------------------------------------------
 # Daily stats
 # ---------------------------------------------------------------------------
@@ -427,7 +443,12 @@ async def db_get_daily_report() -> dict:
     yesterday_rows = await _fetch_all(
         "SELECT * FROM stats_daily WHERE date = date('now', '-1 days')"
     )
-    today_rows = await _fetch_
+    today_rows = await _fetch_all(
+        "SELECT * FROM stats_daily WHERE date = date('now')"
+    )
+    return {"today": today_rows[0] if today_rows else {}, "yesterday": yesterday_rows[0] if yesterday_rows else {}}
+
+
 async def db_add_search_history(user_id: int, keyword: str):
     await _exec(
         "INSERT OR IGNORE INTO search_history (user_id, keyword) VALUES (?, ?)",
@@ -491,39 +512,118 @@ async def db_prune_pushed(days: int = 30):
     await _run(_do)
 
 async def db_migrate_from_json(data_dir: str) -> dict:
+    """Migrate old JSON data files into SQLite tables.
+
+    Looks for vip_users.json, users.json, invites.json, cards.json in
+    *data_dir* and migrates them if the corresponding SQLite table is empty.
+    Migrated files are renamed to *.migrated so they are only processed once.
+    """
     import json as _json
     import os as _os
     stats = {"vip": 0, "users": 0, "cards": 0, "invites": 0, "favorites": 0, "skipped": []}
+
+    # VIP users
     vip_path = _os.path.join(data_dir, "vip_users.json")
     if _os.path.exists(vip_path) and not _os.path.exists(vip_path + ".migrated"):
-        try:
-            with open(vip_path, "r", encoding="utf-8-sig") as f:
-                data = _json.load(f)
-            if isinstance(data, list):
-                data = {int(uid): None for uid in data}
-            else:
-                data = {int(k): v for k, v in data.items()}
-            for user_id, expiry in data.items():
-                await db_save_vip(user_id, expiry)
-                stats["vip"] += 1
-            _os.rename(vip_path, vip_path + ".migrated")
-            logger.info(f"Migrated {stats['vip']} VIP users from vip_users.json")
-        except Exception as e:
-            logger.warning(f"VIP migration failed: {e}")
-            stats["skipped"].append("vip_users.json")
+        if await db_vip_count() == 0:
+            try:
+                with open(vip_path, "r", encoding="utf-8-sig") as f:
+                    data = _json.load(f)
+                if isinstance(data, list):
+                    data = {int(uid): None for uid in data}
+                else:
+                    data = {int(k): v for k, v in data.items()}
+                for user_id, expiry in data.items():
+                    await db_save_vip(user_id, expiry)
+                    stats["vip"] += 1
+                _os.rename(vip_path, vip_path + ".migrated")
+                logger.info("Migrated %d VIP users from %s", stats["vip"], vip_path)
+            except Exception as e:
+                logger.warning("VIP migration failed: %s", e)
+                stats["skipped"].append("vip_users.json")
+        else:
+            logger.info("Skipping VIP migration - DB already has data")
+
+    # All users
     users_path = _os.path.join(data_dir, "users.json")
     if _os.path.exists(users_path) and not _os.path.exists(users_path + ".migrated"):
+        if await db_user_count() == 0:
+            try:
+                with open(users_path, "r", encoding="utf-8-sig") as f:
+                    data = _json.load(f)
+                for uid in data:
+                    await db_add_user(int(uid))
+                    stats["users"] += 1
+                _os.rename(users_path, users_path + ".migrated")
+                logger.info("Migrated %d users from %s", stats["users"], users_path)
+            except Exception as e:
+                logger.warning("Users migration failed: %s", e)
+                stats["skipped"].append("users.json")
+        else:
+            logger.info("Skipping users migration - DB already has data")
+
+    # Invites
+    invites_path = _os.path.join(data_dir, "invites.json")
+    if _os.path.exists(invites_path) and not _os.path.exists(invites_path + ".migrated"):
+        if await db_invite_count() == 0:
+            try:
+                with open(invites_path, "r", encoding="utf-8-sig") as f:
+                    data = _json.load(f)
+                for code, inviter_id in data.items():
+                    await db_save_invite(code, int(inviter_id))
+                    stats["invites"] += 1
+                _os.rename(invites_path, invites_path + ".migrated")
+                logger.info("Migrated %d invites from %s", stats["invites"], invites_path)
+            except Exception as e:
+                logger.warning("Invites migration failed: %s", e)
+                stats["skipped"].append("invites.json")
+        else:
+            logger.info("Skipping invites migration - DB already has data")
+
+    # Cards from cards.json
+    cards_path = _os.path.join(data_dir, "cards.json")
+    if _os.path.exists(cards_path) and not _os.path.exists(cards_path + ".migrated"):
+        if await db_card_count_total() == 0:
+            try:
+                with open(cards_path, "r", encoding="utf-8-sig") as f:
+                    data = _json.load(f)
+                if isinstance(data, dict):
+                    # Filter out label entries (Chinese descriptions in seed data)
+                    clean = {k: v for k, v in data.items() if not any(
+                        label in k for label in ("月卡", "季卡", "年卡", "永久", "体验卡")
+                    )}
+                    if clean:
+                        await db_seed_from_dict(clean)
+                        stats["cards"] = len(clean)
+                _os.rename(cards_path, cards_path + ".migrated")
+                logger.info("Migrated %d cards from %s", stats["cards"], cards_path)
+            except Exception as e:
+                logger.warning("Cards migration failed: %s", e)
+                stats["skipped"].append("cards.json")
+        else:
+            logger.info("Skipping cards migration - DB already has data")
+
+    # Favorites
+    fav_path = _os.path.join(data_dir, "favorites.json")
+    if _os.path.exists(fav_path) and not _os.path.exists(fav_path + ".migrated"):
         try:
-            with open(users_path, "r", encoding="utf-8-sig") as f:
+            with open(fav_path, "r", encoding="utf-8-sig") as f:
                 data = _json.load(f)
-            for uid in data:
-                await db_add_user(int(uid))
-                stats["users"] += 1
-            _os.rename(users_path, users_path + ".migrated")
-            logger.info(f"Migrated {stats['users']} users from users.json")
+            for uid_str, favs in data.items():
+                for f_item in favs:
+                    await db_add_favorite(
+                        int(uid_str),
+                        f_item.get("title", ""),
+                        f_item.get("url", ""),
+                        f_item.get("source", ""),
+                    )
+                    stats["favorites"] += 1
+            _os.rename(fav_path, fav_path + ".migrated")
+            logger.info("Migrated %d favorites from %s", stats["favorites"], fav_path)
         except Exception as e:
-            logger.warning(f"Users migration failed: {e}")
-            stats["skipped"].append("users.json")
+            logger.warning("Favorites migration failed: %s", e)
+            stats["skipped"].append("favorites.json")
+
     return stats
 
 

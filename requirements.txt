@@ -13,3 +13,7 @@ Pillow>=10.0.0
 
 # Cloudflare bypass for XChina
 curl_cffi>=0.7.0
+
+# Web admin dashboard
+flask>=2.3.0
+waitress>=2.1.0

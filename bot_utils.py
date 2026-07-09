@@ -52,15 +52,17 @@ _url_store_lock: asyncio.Lock | None = None
 _url_counter_lock: asyncio.Lock | None = None
 _user_search_lock: asyncio.Lock | None = None
 _download_sem: asyncio.Semaphore | None = None
+_invite_lock: asyncio.Lock | None = None
 
 
 def init_locks() -> None:
-    global _url_store_lock, _url_counter_lock, _user_search_lock, _download_sem
+    global _url_store_lock, _url_counter_lock, _user_search_lock, _download_sem, _invite_lock
     if _url_store_lock is None:
         _url_store_lock = asyncio.Lock()
         _url_counter_lock = asyncio.Lock()
         _user_search_lock = asyncio.Lock()
         _download_sem = asyncio.Semaphore(12)
+        _invite_lock = asyncio.Lock()
 
 
 def get_download_sem() -> asyncio.Semaphore:
@@ -81,6 +83,11 @@ def get_url_counter_lock() -> asyncio.Lock:
 def get_user_search_lock() -> asyncio.Lock:
     assert _user_search_lock is not None
     return _user_search_lock
+
+
+def get_invite_lock() -> asyncio.Lock:
+    assert _invite_lock is not None
+    return _invite_lock
 
 
 ADMIN_IDS: set[int] = config.ADMIN_IDS
