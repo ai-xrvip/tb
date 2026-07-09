@@ -11,6 +11,8 @@ What it does:
   5. Wait for domain → set WEBHOOK_URL → re-deploy
 
 No pip install needed — uses only urllib (stdlib).
+
+Set RAILWAY_TOKEN and RAILWAY_PROJECT_ID in environment variables before running.
 """
 
 import json
@@ -21,9 +23,9 @@ import urllib.request
 import urllib.error
 
 # ===== CONFIG =====
-RAILWAY_TOKEN = "d9599893-dcb4-4a3d-af19-c0e53ca89804"
+RAILWAY_TOKEN = os.environ.get("RAILWAY_TOKEN", "")
 RAILWAY_API = "https://backboard.railway.com/graphql/v2"
-PROJECT_ID = "d9e62341-f0a7-4313-a456-5d2e19487577"
+PROJECT_ID = os.environ.get("RAILWAY_PROJECT_ID", "")
 
 # ⚠️ FILL THESE IN ⚠️
 BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
@@ -240,6 +242,15 @@ def set_webhook(env_id, domain):
 
 
 def main():
+    if not RAILWAY_TOKEN:
+        print("[FATAL] RAILWAY_TOKEN environment variable not set.")
+        print("  Set it in your env or use: export RAILWAY_TOKEN=your-token")
+        sys.exit(1)
+    if not PROJECT_ID:
+        print("[FATAL] RAILWAY_PROJECT_ID environment variable not set.")
+        print("  Set it in your env or use: export RAILWAY_PROJECT_ID=your-project-id")
+        sys.exit(1)
+
     print("=" * 50)
     print("  Railway Deploy — tb-bot")
     print("=" * 50)

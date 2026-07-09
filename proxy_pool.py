@@ -16,7 +16,7 @@ PROXY_SOURCES = [
 
 REFRESH_INTERVAL = 600
 PROXY_TIMEOUT = 5.0
-VALIDATE_URLS = ["https://www.4khd.com", "https://www.baidu.com"]
+VALIDATE_URLS = ["https://www.4khd.com"]
 
 _proxy_pool: list[str] = []
 _pool_lock = asyncio.Lock()
@@ -160,6 +160,7 @@ async def start_proxy_pool():
     async def _periodic_refresh():
         await asyncio.sleep(REFRESH_INTERVAL)
         while True:
+            await _do_refresh()
             stats = await get_pool_stats()
             hc = await health_check()
             logger.info(

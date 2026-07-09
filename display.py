@@ -252,8 +252,23 @@ async def _send_gallery_full(update, url):
         gid = re.search(r"/id-([a-f0-9]+)", url)
         if gid:
             gallery_id = gid.group(1)
-            max_imgs = 200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST
-            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
+            # Fetch the gallery first to know the actual image count
+            try:
+                detail = await get_xchina_gallery(url)
+                actual_count = detail.get("count", 0)
+                actual_images = detail.get("images", [])
+            except Exception:
+                logger.warning("XC full gallery: failed to get detail, using default gen")
+                actual_count = 0
+                actual_images = []
+            max_imgs = min(
+                200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST,
+                actual_count if actual_count > 0 else (200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST),
+            )
+            if actual_images:
+                all_images = actual_images[:max_imgs]
+            else:
+                all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
         else:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
             return
@@ -315,8 +330,23 @@ async def _send_gallery_page(update, url, page=0):
         gid = re.search(r"/id-([a-f0-9]+)", url)
         if gid:
             gallery_id = gid.group(1)
-            max_imgs = 200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST
-            all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
+            # Fetch the gallery first to know the actual image count
+            try:
+                detail = await get_xchina_gallery(url)
+                actual_count = detail.get("count", 0)
+                actual_images = detail.get("images", [])
+            except Exception:
+                logger.warning("XC gallery page: failed to get detail, using default gen")
+                actual_count = 0
+                actual_images = []
+            max_imgs = min(
+                200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST,
+                actual_count if actual_count > 0 else (200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST),
+            )
+            if actual_images:
+                all_images = actual_images[:max_imgs]
+            else:
+                all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
         else:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
             return

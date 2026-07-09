@@ -53,16 +53,18 @@ _url_counter_lock: asyncio.Lock | None = None
 _user_search_lock: asyncio.Lock | None = None
 _download_sem: asyncio.Semaphore | None = None
 _invite_lock: asyncio.Lock | None = None
+_vip_lock: asyncio.Lock | None = None
 
 
 def init_locks() -> None:
-    global _url_store_lock, _url_counter_lock, _user_search_lock, _download_sem, _invite_lock
+    global _url_store_lock, _url_counter_lock, _user_search_lock, _download_sem, _invite_lock, _vip_lock
     if _url_store_lock is None:
         _url_store_lock = asyncio.Lock()
         _url_counter_lock = asyncio.Lock()
         _user_search_lock = asyncio.Lock()
         _download_sem = asyncio.Semaphore(12)
         _invite_lock = asyncio.Lock()
+        _vip_lock = asyncio.Lock()
 
 
 def get_download_sem() -> asyncio.Semaphore:
@@ -88,6 +90,11 @@ def get_user_search_lock() -> asyncio.Lock:
 def get_invite_lock() -> asyncio.Lock:
     assert _invite_lock is not None
     return _invite_lock
+
+
+def get_vip_lock() -> asyncio.Lock:
+    assert _vip_lock is not None
+    return _vip_lock
 
 
 ADMIN_IDS: set[int] = config.ADMIN_IDS
@@ -266,10 +273,15 @@ def is_vip(user_id: int) -> bool:
 
 
 def _clean_expired_vip() -> None:
-    asyncio.create_task(_async_clean_expired_vip())
+    """Schedule async expired VIP cleanup with lock protection."""
+    async def _locked_cleanup():
+        async with get_vip_lock():
+            await _async_clean_expired_vip()
+    asyncio.create_task(_locked_cleanup())
 
 
 async def _async_clean_expired_vip() -> None:
+    """Remove expired VIP users. Caller must hold _vip_lock."""
     now = now_ts()
     expired = [uid for uid, exp in list(VIP_USERS.items()) if exp is not None and now > exp]
     if expired:

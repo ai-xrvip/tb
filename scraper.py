@@ -1,6 +1,7 @@
 """4KHD.com scraper - search galleries and extract images (async version)"""
 import re
 import asyncio
+import hashlib
 import random
 import logging
 import urllib.parse
@@ -95,26 +96,28 @@ async def get_hot_keywords(top_n: int = 5) -> list[str]:
 
 async def _cache_get(key: str) -> Optional[Any]:
     """Get from cache if not expired. Returns None if miss."""
+    safe_key = hashlib.md5(key.encode("utf-8")).hexdigest()
     async with _cache_lock:
-        entry = _cache.get(key)
+        entry = _cache.get(safe_key)
         if entry is None:
             return None
         ts, data = entry
         if datetime.now().timestamp() - ts < config.CACHE_TTL:
             return data
-        del _cache[key]
+        del _cache[safe_key]
         return None
 
 
 async def _cache_set(key: str, data: Any):
     """Set cache entry, evicting oldest if over limit."""
+    safe_key = hashlib.md5(key.encode("utf-8")).hexdigest()
     async with _cache_lock:
         if len(_cache) >= config.CACHE_MAX_ENTRIES:
             # Evict oldest 20% of entries
             sorted_keys = sorted(_cache.keys(), key=lambda k: _cache[k][0])
             for k in sorted_keys[:max(1, len(sorted_keys) // 5)]:
                 del _cache[k]
-        _cache[key] = (datetime.now().timestamp(), data)
+        _cache[safe_key] = (datetime.now().timestamp(), data)
 
 
 def _fix_image_url(src: str) -> Optional[str]:
@@ -299,10 +302,12 @@ async def search_galleries(keyword: str, max_results: int = None, max_pages: int
     seen_urls = set()
 
     for sp_idx, sp_url in enumerate(search_pages):
+        current_page_html = text
         if sp_idx > 0:
             sp_text = await _fetch(sp_url)
             if not sp_text:
                 continue
+            current_page_html = sp_text
             soup = await asyncio.get_running_loop().run_in_executor(None, BeautifulSoup, sp_text, "html.parser")
             await asyncio.sleep(0.3)
 
@@ -331,8 +336,8 @@ async def search_galleries(keyword: str, max_results: int = None, max_pages: int
             excerpt_el = article.find(["p", ".excerpt", ".entry-summary", ".description"])
             description = excerpt_el.text.strip()[:200] if excerpt_el else ""
 
-            # Extract publish_date from page meta
-            pd = _extract_date(text) if sp_idx == 0 and not all_results else ""
+            # Extract publish_date from the current page's HTML
+            pd = _extract_date(current_page_html)
             all_results.append({
                 "title": title,
                 "url": link,
@@ -644,10 +649,12 @@ async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 
     seen_urls = set()
 
     for page in range(1, max_pages + 1):
-        url = search_url if page == 1 else f"{XC_BASE}/photos.html?page={page}"
-        if page > 1 and keyword.strip():
-            # Search results might not support ?page=, skip pagination for search
-            break
+        if page == 1:
+            url = search_url
+        elif keyword.strip():
+            url = f"{XC_BASE}/photos/keyword-{urllib.parse.quote(keyword)}.html?page={page}"
+        else:
+            url = f"{XC_BASE}/photos.html?page={page}"
 
         text = await _xc_fetch(url)
         if not text:

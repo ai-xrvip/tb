@@ -1,5 +1,5 @@
 """E-Hentai scraper: search, gallery images, magnet links."""
-import asyncio, hashlib, logging, re, time, random
+import asyncio, hashlib, logging, re, time, random, urllib.parse
 from io import BytesIO
 from typing import Optional
 from bs4 import BeautifulSoup
@@ -98,7 +98,7 @@ async def search_ehentai(keyword: str, max_results: int = 20, max_pages: int = M
     seen = set()
 
     for page in range(max_pages):
-        url = EH_SEARCH.format(keyword=keyword)
+        url = EH_SEARCH.format(keyword=urllib.parse.quote(keyword))
         if page > 0:
             url += f"&page={page}"
 

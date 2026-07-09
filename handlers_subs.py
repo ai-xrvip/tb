@@ -114,7 +114,7 @@ async def _subscription_push_loop(application):
                                     parse_mode="HTML",
                                     reply_markup=InlineKeyboardMarkup([[
                                         InlineKeyboardButton("👀 查看详情", callback_data=
-                                            "d_" + ("x_" if r.get("source") == "xchina" else
+                                            ("x_" if r.get("source") == "xchina" else
                                             "e_" if r.get("source") == "ehentai" else "d_") +
                                             await store_url(url, source=r.get("source", ""))
                                         )
@@ -172,7 +172,7 @@ async def _vip_daily_push(application):
                     pick = _rand.choice(candidates_pool)
                     await application.bot.send_message(
                         chat_id=uid,
-                        text='\ud83d\udcec <b>VIP\u6bcf\u65e5\u7cbe\u9009</b>\n\n' + pick["title"] + '\n\n\u70b9\u51fb\u67e5\u770b\u8be6\u60c5 \u2192',
+                        text='\ud83d\udcec <b>VIP\u6bcf\u65e5\u7cbe\u9009</b>\n\n' + html.escape(pick["title"]) + '\n\n\u70b9\u51fb\u67e5\u770b\u8be6\u60c5 \u2192',
                         parse_mode="HTML",
                         reply_markup=InlineKeyboardMarkup([[
                             InlineKeyboardButton("\ud83d\udc40 \u67e5\u770b\u8be6\u60c5", callback_data=f"x_{await store_url(pick['url'], source='xchina')}")
@@ -191,7 +191,7 @@ async def _vip_daily_push(application):
 
 async def error_handler(update, context):
     logger.error("Global error: " + str(context.error), exc_info=True)
-    if update and isinstance(update, type(update)) and getattr(update, 'effective_message', None):
+    if update and isinstance(update, Update) and getattr(update, 'effective_message', None):
         try:
             await update.effective_message.reply_text("\u274c \u51fa\u9519\u4e86\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002")
         except Exception:
@@ -208,8 +208,8 @@ async def _db_backup_loop():
         now = datetime.now()
         target = now.replace(hour=3, minute=0, second=0, microsecond=0)
         if now >= target:
-            import time as _t
-            target = target + _t.timedelta(days=1)
+            from datetime import timedelta
+            target = target + timedelta(days=1)
         wait_secs = (target - now).total_seconds()
         await asyncio.sleep(wait_secs)
         try:

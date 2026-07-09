@@ -6,7 +6,7 @@ from bot_utils import (
     INVITES, ADMIN_IDS, START_TEXT, START_KEYBOARD, VIP_TEXT,
     PURCHASE_URL, _ONE_DAY, MENU_KEYBOARD,
     save_vip_db, save_invite_db, load_vip_db, build_hot_keyword_keyboard,
-    get_invite_lock,
+    get_invite_lock, get_vip_lock,
 )
 from handlers_search import _do_search, _do_search_callback
 from handlers_menu import _route_random_gallery
@@ -18,6 +18,7 @@ from database import (
     db_delete_expired_vip,
     db_load_cards, db_activate_card,
 )
+from scraper import get_random_gallery
 import asyncio, html, logging, re, secrets, string, traceback
 from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -39,16 +40,19 @@ async def cmd_start(update, context):
             async with get_invite_lock():
                 inviter = INVITES.get(code)
                 if inviter and int(inviter) != user_id:
-                    # Grant 1 day VIP to inviter
-                    existing = VIP_USERS.get(int(inviter))
-                    if existing is not None:
-                        VIP_USERS[int(inviter)] = max(existing or now_ts(), now_ts()) + _ONE_DAY
+                    # Grant 1 day VIP to inviter (preserve permanent status)
+                    inviter_id = int(inviter)
+                    current_expiry = VIP_USERS.get(inviter_id)
+                    if current_expiry is None:
+                        # Permanent VIP — stays permanent
+                        pass
+                    elif current_expiry > now_ts():
+                        # Active timed VIP — extend by 1 day
+                        VIP_USERS[inviter_id] = current_expiry + _ONE_DAY
                     else:
-                        if is_vip(int(inviter)):
-                            VIP_USERS[int(inviter)] = max(VIP_USERS.get(int(inviter), now_ts()), now_ts()) + _ONE_DAY
-                        else:
-                            VIP_USERS[int(inviter)] = now_ts() + _ONE_DAY
-                    asyncio.create_task(db_save_vip(int(inviter), VIP_USERS[int(inviter)]))
+                        # No VIP or expired — grant 1 day
+                        VIP_USERS[inviter_id] = now_ts() + _ONE_DAY
+                    asyncio.create_task(db_save_vip(inviter_id, VIP_USERS[inviter_id]))
                     try:
                         await context.bot.send_message(
                             chat_id=int(inviter),
@@ -56,6 +60,16 @@ async def cmd_start(update, context):
                         )
                     except Exception:
                         pass
+                    # Also grant 1-day trial VIP to the invited user
+                    invited_expiry = VIP_USERS.get(user_id)
+                    if invited_expiry is None:
+                        # Permanent VIP — stays permanent
+                        pass
+                    elif invited_expiry and invited_expiry > now_ts():
+                        VIP_USERS[user_id] = invited_expiry + _ONE_DAY
+                    else:
+                        VIP_USERS[user_id] = now_ts() + _ONE_DAY
+                    asyncio.create_task(db_save_vip(user_id, VIP_USERS[user_id]))
     await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
 
@@ -100,14 +114,17 @@ async def cmd_admin(update, context):
             await update.message.reply_text("用户ID必须是数字")
         return
 
-    VIP_USERS.clear()
-    VIP_USERS.update(await load_vip_db())
+    # Reload VIP data from DB with lock protection
+    fresh_vip = await load_vip_db()
     now = now_ts()
-    expired = [uid for uid, exp in list(VIP_USERS.items()) if exp is not None and now > exp]
+    expired = [uid for uid, exp in list(fresh_vip.items()) if exp is not None and now > exp]
     for uid in expired:
-        del VIP_USERS[uid]
+        del fresh_vip[uid]
     if expired:
         asyncio.create_task(db_delete_expired_vip())
+    async with get_vip_lock():
+        VIP_USERS.clear()
+        VIP_USERS.update(fresh_vip)
     total_vip = len(VIP_USERS)
     permanent = sum(1 for v in VIP_USERS.values() if v is None)
     timed = total_vip - permanent
@@ -204,7 +221,8 @@ async def cmd_my(update, context):
     user_id = update.effective_user.id
     if is_vip(user_id):
         expiry = VIP_USERS.get(user_id)
-        if expiry is None:
+        is_permanent = expiry is None
+        if is_permanent:
             info = "永久会员 ♾️"
         else:
             exp_str = datetime.fromtimestamp(expiry).strftime("%Y年%m月%d日")
@@ -213,15 +231,17 @@ async def cmd_my(update, context):
         # First check invite info
         my_invites = [code for code, inviter in INVITES.items() if inviter == str(user_id)]
         inv_text = f"\n\n🔗 你的邀请码: <code>{my_invites[0]}</code>\n发送: /start {my_invites[0]} 给好友" if my_invites else ""
+        reply_buttons = [
+            [InlineKeyboardButton("⭐ 收藏夹", callback_data="fav_list")],
+            [InlineKeyboardButton("🔗 生成邀请码", callback_data="invite_gen")],
+        ]
+        if not is_permanent:
+            reply_buttons.append([InlineKeyboardButton("🔑 续费/升级", callback_data="vip_activate")])
+        reply_buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
         await update.message.reply_text(
             f"👑 <b>你的VIP信息</b>\n\n{info}{inv_text}",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⭐ 收藏夹", callback_data="fav_list")],
-                [InlineKeyboardButton("🔗 生成邀请码", callback_data="invite_gen")],
-                [InlineKeyboardButton("🔑 续费/升级", callback_data="vip_activate")],
-                [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")],
-            ]))
+            reply_markup=InlineKeyboardMarkup(reply_buttons))
     else:
         await update.message.reply_text(
             "👑 <b>VIP会员</b>\n\n你还不是VIP会员哦～\n开通后可以：\n• 查看全部搜索结果\n• 翻页浏览所有图片\n• 收藏喜欢的图集",
