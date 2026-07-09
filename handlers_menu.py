@@ -1,7 +1,7 @@
 """handlers_menu.py — Menu handlers and inline query handler."""
 from bot_utils import (
     now_ts, store_url, get_url, clean_title, parse_count_from_title,
-    is_vip, user_waiting_search, send_or_edit, safe_search_wrapper, PURCHASE_URL,
+    is_vip, user_waiting_search, user_waiting_card, send_or_edit, safe_search_wrapper, PURCHASE_URL,
     START_TEXT, START_KEYBOARD, VIP_TEXT,
     build_hot_keyword_keyboard,
 )
