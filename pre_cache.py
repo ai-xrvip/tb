@@ -22,10 +22,12 @@ _WEEK_SEC = 5 * 86400
 
 
 def _is_recent(gallery: dict) -> bool:
-    """Check if gallery's publish_date is within the last week."""
+    """Check if gallery's publish_date is within 5 days.
+    Returns True for unknown dates (search results have no dates).
+    """
     pd = gallery.get("publish_date", "")
     if not pd:
-        return False
+        return True
     now = datetime.now(timezone.utc)
     try:
         import re
@@ -37,11 +39,10 @@ def _is_recent(gallery: dict) -> bool:
             if m:
                 dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
             else:
-                return False
+                return True
         return (now - dt).total_seconds() < _WEEK_SEC
     except Exception:
-        return False
-
+        return True
 
 async def _fetch_latest_from(source: str, count: int = 6) -> list:
     """Fetch the latest galleries from one source."""
