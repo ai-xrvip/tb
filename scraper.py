@@ -536,7 +536,7 @@ async def _xc_fetch(url: str, retries: int = 2) -> str | None:
                 curl_req.get,
                 url,
                 headers=XC_HEADERS,
-                impersonate="chrome133",
+                impersonate="chrome131",
                 timeout=15,
             )
             if r.status_code == 200:
@@ -574,7 +574,7 @@ async def _xc_fetch_bytes(url: str, referer: str = "") -> Optional[tuple[BytesIO
                 curl_req.get,
                 url,
                 headers=headers,
-                impersonate="chrome133",
+                impersonate="chrome131",
                 timeout=20,
             )
             if r.status_code == 200 and len(r.content) > 500:
