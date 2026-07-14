@@ -18,7 +18,7 @@ PRE_CACHE_SIZE = 20
 FETCH_SLOTS = 15      # max slots from periodic fetches (12h)
 POPULAR_SLOTS = 5      # max slots from popular galleries (2h)
 
-_WEEK_SEC = 7 * 86400
+_WEEK_SEC = 5 * 86400
 
 
 def _is_recent(gallery: dict) -> bool:
