@@ -603,6 +603,22 @@ async def db_migrate_from_json(data_dir: str) -> dict:
         else:
             logger.info("Skipping cards migration - DB already has data")
 
+    # Fallback: if cards.json doesn't exist (excluded by .dockerignore), seed from seed_cards.py
+    if stats["cards"] == 0 and await db_card_count_total() == 0:
+        try:
+            from seed_cards import SEED_CARDS
+            if SEED_CARDS:
+                clean = {k: v for k, v in SEED_CARDS.items() if not any(
+                    label in k for label in ("月卡", "季卡", "年卡", "永久", "体验")
+                )}
+                if clean:
+                    await db_seed_from_dict(clean)
+                    stats["cards"] = len(clean)
+                    logger.info("Seeded %d cards from seed_cards.py (fallback)", stats["cards"])
+        except Exception as e:
+            logger.warning("Cards seed fallback failed: %s", e)
+            stats.setdefault("skipped", []).append("seed_cards.py")
+
     # Favorites
     fav_path = _os.path.join(data_dir, "favorites.json")
     if _os.path.exists(fav_path) and not _os.path.exists(fav_path + ".migrated"):
