@@ -76,7 +76,7 @@ async def _refill_from_sources():
     if current_count >= FETCH_SLOTS:
         return
 
-    sources = ["ehentai", "xchina", "4khd"]
+    sources = ["4khd"]
     random.shuffle(sources)
 
     for source in sources:
@@ -185,7 +185,7 @@ async def track_pre_skipped(user_id):
 
 async def _fetch_replacement():
     """Immediately fetch one gallery from a random source to fill the gap."""
-    source = random.choice(["ehentai", "xchina", "4khd"])
+    source = "4khd"
     galleries = await _fetch_latest_from(source, count=3)
     if galleries:
         async with _pre_cache_lock:
