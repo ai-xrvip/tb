@@ -496,26 +496,10 @@ async def get_random_gallery():
     except Exception:
         pass
 
-    # Live fallback: search all 3 platforms with hot keywords
+    # Live fallback: search 4KHD with hot keywords
     hot_kws = await get_hot_keywords(top_n=5)
     kw = _random.choice(hot_kws) if hot_kws else "cosplay"
     candidates = []
-
-    # EH
-    if config.EH_MEMBER_ID:
-        try:
-            from scraper_eh import search_ehentai
-            eh = await search_ehentai(kw, max_results=10, max_pages=1)
-            candidates.extend(eh)
-        except Exception:
-            pass
-
-    # XC
-    try:
-        xc = await search_xchina(kw, max_results=15, max_pages=1)
-        candidates.extend(xc)
-    except Exception:
-        pass
 
     # 4KHD
     try:
