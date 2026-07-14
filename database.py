@@ -640,6 +640,14 @@ async def db_migrate_from_json(data_dir: str) -> dict:
             logger.warning("Favorites migration failed: %s", e)
             stats["skipped"].append("favorites.json")
 
+    # Log card count for diagnostics
+    try:
+        total = await db_card_count_total()
+        used = await db_card_count_used()
+        logger.info("Card DB stats: %d total, %d used", total, used)
+    except Exception as e:
+        logger.debug("Card stats logging failed: %s", e)
+
     return stats
 
 
