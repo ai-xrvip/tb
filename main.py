@@ -1,4 +1,4 @@
-"""main.py 锟?Application entry point (uses the refactored handler modules).
+"""main.py — Application entry point (uses the refactored handler modules).
 
 This module wires together all refactored components:
   - SQLite database (database.py)
@@ -82,10 +82,10 @@ async def _periodic_cleanup(application):
                         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
                         await application.bot.send_message(
                             chat_id=uid,
-                            text=f"锟?<b>VIP鍗冲皢鍒版湡鎻愰啋</b>\n\n浣犵殑VIP浼氬憳灏嗕簬 <b>{exp_str}</b> 鍒版湡锛岃鍙婃椂缁垂鍝︼綖",
+                            text=f"⏰ <b>VIP即将到期提醒</b>\n\n你的VIP会员将于 <b>{exp_str}</b> 到期，请及时续费哦～",
                             parse_mode="HTML",
                             reply_markup=InlineKeyboardMarkup([[
-                                InlineKeyboardButton("馃挸 璐拱鍗″瘑", url=PURCHASE_URL)
+                                InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)
                             ]]))
                     except Exception as e:
                         logger.debug("VIP reminder send failed for user %s: %s", uid, e)
@@ -118,15 +118,15 @@ async def _startup(application):
     # Set bot commands
     from telegram import BotCommand
     await application.bot.set_my_commands([
-        BotCommand("start", "馃彔 涓昏彍锟?),
-        BotCommand("search", "馃攳 鎼滅储鍥鹃泦"),
-        BotCommand("random", "馃幉 闅忔満鎺ㄨ崘"),
-        BotCommand("my", "馃懁 鎴戠殑VIP"),
-        BotCommand("subscribe", "馃敂 璁㈤槄鍏抽敭锟?),
-        BotCommand("unsubscribe", "馃敃 鍙栨秷璁㈤槄"),
-        BotCommand("help", "馃摉 浣跨敤甯姪"),
+        BotCommand("start", "🏠 主菜单"),
+        BotCommand("search", "🔍 搜索图集"),
+        BotCommand("random", "🎲 随机推荐"),
+        BotCommand("my", "👤 我的VIP"),
+        BotCommand("subscribe", "🔔 订阅关键词"),
+        BotCommand("unsubscribe", "🔕 取消订阅"),
+        BotCommand("help", "📖 使用帮助"),
     ])
-    logger.info("Bot started 锟?all services running")
+    logger.info("Bot started — all services running")
 
 async def shutdown(app, signal_str=None):
     if signal_str:
@@ -295,7 +295,7 @@ def main():
             logger.warning(f"Flask admin not started: {e}")
 
         async def _start_polling():
-            await app.initialize()  # triggers post_init 锟?_startup 锟?proxy_pool + pre_cache + bg tasks
+            await app.initialize()  # triggers post_init → _startup → proxy_pool + pre_cache + bg tasks
             await app.start()
             await app.updater.start_polling(allowed_updates=["message", "callback_query", "inline_query"])
             try:
