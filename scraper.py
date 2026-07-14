@@ -250,18 +250,17 @@ def crop_watermark(img_bytes: BytesIO) -> BytesIO:
 
 
 def _extract_date(html_text: str) -> str:
-    """Extract publish date from HTML string."""
+    """Extract publish date from HTML string (returns ISO format)."""
     m = re.search(r'<meta\s+property="article:published_time"\s+content="([^"]+)"', html_text)
     if m:
         dt = m.group(1)
         try:
             parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-            return parsed.strftime("%Y年%m月%d日")
+            return parsed.strftime("%Y-%m-%d")
         except Exception:
             m2 = re.search(r"(\d{4}-\d{2}-\d{2})", dt)
             if m2:
-                parts = m2.group(1).split("-")
-                return f"{parts[0]}年{parts[1]}月{parts[2]}日"
+                return m2.group(1)
     return ""
 
 
