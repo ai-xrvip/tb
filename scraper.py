@@ -96,7 +96,7 @@ async def get_hot_keywords(top_n: int = 5) -> list[str]:
         for kw, cnt in sorted_kw:
             kw = kw.strip()
             # Skip card codes (start with Y-, J-, N-, S-)
-            if re.match(r'^[YJNS]-[A-Z0-9]{10,}
+            if re.match(r'^[YJNS]-[A-Z0-9]{10,}$', kw, re.I):
 
     # Live fallback: search 4KHD with hot keywords
     hot_kws = await get_hot_keywords(top_n=5)
