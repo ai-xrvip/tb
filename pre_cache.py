@@ -31,7 +31,7 @@ def _is_recent(gallery: dict) -> bool:
     now = datetime.now(timezone.utc)
     try:
         import re
-        m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", pd)
+        m = re.match(r"(\d{4})\u5e74(\d{1,2})\u6708(\d{1,2})\u65e5", pd)
         if m:
             dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
         else:
