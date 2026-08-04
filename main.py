@@ -348,6 +348,18 @@ def main():
         async def _boot():
             await start_database()
             await _load_data()
+            # Auto-migrate from JSON if there are old data files
+            import os as _os
+            data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data")
+            if _os.path.isdir(data_dir):
+                from database import db_migrate_from_json
+                migration_stats = await db_migrate_from_json(data_dir)
+                if any(v > 0 for v in migration_stats.values() if isinstance(v, int)):
+                    logger.info("Auto-migration complete: %s", migration_stats)
+                # Re-load data after migration
+                await _load_data()
+            else:
+                logger.info("No data/ directory found for migration")
             await app.initialize()
             await app.start()
             # Start Flask admin on a separate port
@@ -377,6 +389,18 @@ def main():
         async def _boot():
             await start_database()
             await _load_data()
+            # Auto-migrate from JSON if there are old data files
+            import os as _os
+            data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data")
+            if _os.path.isdir(data_dir):
+                from database import db_migrate_from_json
+                migration_stats = await db_migrate_from_json(data_dir)
+                if any(v > 0 for v in migration_stats.values() if isinstance(v, int)):
+                    logger.info("Auto-migration complete: %s", migration_stats)
+                # Re-load data after migration
+                await _load_data()
+            else:
+                logger.info("No data/ directory found for migration")
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
