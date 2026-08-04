@@ -90,6 +90,12 @@ CREATE TABLE IF NOT EXISTS search_history (
 
 CREATE INDEX IF NOT EXISTS idx_history_user ON search_history(user_id, searched_at DESC);
 
+CREATE TABLE IF NOT EXISTS search_quota (
+    user_id    INTEGER PRIMARY KEY,
+    date       TEXT NOT NULL DEFAULT '',
+    used       INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS subscriptions (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER NOT NULL,
@@ -324,20 +330,28 @@ async def db_load_cards() -> dict:
     }
 
 
-async def db_save_card(code: str, card_type: str, days: Optional[int], created_by: int):
-    await _exec(
+async def db_save_card(code: str, card_type: str, days: Optional[int], created_by: int) -> bool:
+    """Insert a card. Returns True if newly inserted, False if the code already exists."""
+    return await _exec_rowcount(
         "INSERT OR IGNORE INTO cards (code, card_type, days, created_by) VALUES (?, ?, ?, ?)",
         (code, card_type, days, created_by),
-    )
+    ) > 0
 
 
-async def db_activate_card(code: str, user_id: int) -> bool:
-    """Activate a card. Returns True if activation succeeded, False if card not found or already used.
+async def db_activate_card(code: str, user_id: int) -> Optional[dict]:
+    """Activate a card. Returns the activated card row (code, card_type, days) or None.
     Atomic: the UPDATE WHERE used=0 ensures no race condition."""
-    return (await _exec_rowcount(
-        "UPDATE cards SET used=1, used_by=?, used_at=strftime('%s') WHERE code=? AND used=0",
-        (user_id, code),
-    )) > 0
+    def _do():
+        c = _conn()
+        cur = c.execute(
+            "UPDATE cards SET used=1, used_by=?, used_at=strftime('%s') WHERE code=? AND used=0",
+            (user_id, code),
+        )
+        if cur.rowcount == 0:
+            return None
+        c.commit()
+        return c.execute("SELECT code, card_type, days FROM cards WHERE code = ?", (code,)).fetchone()
+    return await _run(_do)
 
 
 async def db_card_count_used() -> int:
@@ -454,6 +468,28 @@ async def db_add_search_history(user_id: int, keyword: str):
         "INSERT OR IGNORE INTO search_history (user_id, keyword) VALUES (?, ?)",
         (user_id, keyword.lower()),
     )
+
+
+async def db_bump_search_quota(user_id: int, date_str: str) -> int:
+    """Increment today's free-search counter for a user; returns the new used count."""
+    def _do():
+        c = _conn()
+        row = c.execute("SELECT date, used FROM search_quota WHERE user_id = ?", (user_id,)).fetchone()
+        if row is None:
+            used = 1
+            c.execute(
+                "INSERT INTO search_quota (user_id, date, used) VALUES (?, ?, ?)",
+                (user_id, date_str, used),
+            )
+        elif row["date"] == date_str:
+            used = row["used"] + 1
+            c.execute("UPDATE search_quota SET used = ? WHERE user_id = ?", (used, user_id))
+        else:
+            used = 1
+            c.execute("UPDATE search_quota SET date = ?, used = 1 WHERE user_id = ?", (date_str, user_id))
+        c.commit()
+        return used
+    return await _run(_do)
 
 async def db_get_user_history(user_id: int, limit: int = 6) -> list[str]:
     rows = await _fetch_all(
@@ -603,6 +639,22 @@ async def db_migrate_from_json(data_dir: str) -> dict:
         else:
             logger.info("Skipping cards migration - DB already has data")
 
+    # Fallback: if cards.json doesn't exist (excluded by .dockerignore), seed from seed_cards.py
+    if stats["cards"] == 0 and await db_card_count_total() == 0:
+        try:
+            from seed_cards import SEED_CARDS
+            if SEED_CARDS:
+                clean = {k: v for k, v in SEED_CARDS.items() if not any(
+                    label in k for label in ("月卡", "季卡", "年卡", "永久", "体验")
+                )}
+                if clean:
+                    await db_seed_from_dict(clean)
+                    stats["cards"] = len(clean)
+                    logger.info("Seeded %d cards from seed_cards.py (fallback)", stats["cards"])
+        except Exception as e:
+            logger.warning("Cards seed fallback failed: %s", e)
+            stats.setdefault("skipped", []).append("seed_cards.py")
+
     # Favorites
     fav_path = _os.path.join(data_dir, "favorites.json")
     if _os.path.exists(fav_path) and not _os.path.exists(fav_path + ".migrated"):
@@ -623,6 +675,14 @@ async def db_migrate_from_json(data_dir: str) -> dict:
         except Exception as e:
             logger.warning("Favorites migration failed: %s", e)
             stats["skipped"].append("favorites.json")
+
+    # Log card count for diagnostics
+    try:
+        total = await db_card_count_total()
+        used = await db_card_count_used()
+        logger.info("Card DB stats: %d total, %d used", total, used)
+    except Exception as e:
+        logger.debug("Card stats logging failed: %s", e)
 
     return stats
 

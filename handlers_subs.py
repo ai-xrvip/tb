@@ -1,4 +1,4 @@
-"""handlers_subs.py — Subscriptions, error handler, VIP push, DB backup."""
+﻿"""handlers_subs.py — Subscriptions, error handler, VIP push, DB backup."""
 from bot_utils import (
     now_ts, store_url, get_url, safe_search_wrapper, parse_date_for_sort,
     is_vip, cleanup_all, VIP_USERS, ALL_USERS, EH_ENABLED, PURCHASE_URL,
@@ -9,7 +9,7 @@ from database import (
     db_subscribe, db_unsubscribe, db_get_subscriptions, db_get_all_subscriptions,
     db_was_pushed, db_mark_pushed, db_prune_pushed, db_add_search_history,
 )
-from scraper import search_galleries, search_xchina
+from scraper import search_galleries
 from scraper_eh import search_ehentai
 import asyncio, gc, html, logging, os, traceback
 from datetime import datetime
@@ -83,12 +83,10 @@ async def _subscription_push_loop(application):
                 try:
                     # Search the relevant source(s)
                     candidates = []
-                    if not source or source == "4khd":
+                    if not source or source in ("4khd", "xchina"):
+                        # xchina was removed as an unstable source; route those subscriptions to 4KHD
                         hd = await safe_search_wrapper("4KHD", search_galleries(keyword, max_results=5))
                         candidates.extend(hd)
-                    if not source or source == "xchina":
-                        xc = await safe_search_wrapper("XChina", search_xchina(keyword, max_results=5))
-                        candidates.extend(xc)
                     if (not source or source == "ehentai") and EH_ENABLED:
                         eh = await safe_search_wrapper("EH", search_ehentai(keyword, max_results=5))
                         candidates.extend(eh)
@@ -114,8 +112,7 @@ async def _subscription_push_loop(application):
                                     parse_mode="HTML",
                                     reply_markup=InlineKeyboardMarkup([[
                                         InlineKeyboardButton("👀 查看详情", callback_data=
-                                            ("x_" if r.get("source") == "xchina" else
-                                            "e_" if r.get("source") == "ehentai" else "d_") +
+                                            ("e_" if r.get("source") == "ehentai" else "d_") +
                                             await store_url(url, source=r.get("source", ""))
                                         )
                                     ]])
@@ -152,15 +149,15 @@ async def _vip_daily_push(application):
             await asyncio.sleep(wait_secs)
 
             # Get recent galleries \u2014 build diverse pool per VIP user
-            from scraper import search_xchina, get_hot_keywords
+            from scraper import search_galleries, get_hot_keywords
             kws = await get_hot_keywords(top_n=5)
             candidates_pool = []
             for kw in kws:
                 try:
-                    xc = await search_xchina(kw, max_results=3, max_pages=1)
-                    candidates_pool.extend(xc)
+                    hd = await search_galleries(kw, max_results=3, max_pages=1)
+                    candidates_pool.extend(hd)
                 except Exception as e:
-                    logger.warning("VIP push search_xchina failed for kw=%s: %s", kw, e)
+                    logger.warning("VIP push search_galleries failed for kw=%s: %s", kw, e)
             if not candidates_pool:
                 continue
 
@@ -175,7 +172,7 @@ async def _vip_daily_push(application):
                         text='\ud83d\udcec <b>VIP\u6bcf\u65e5\u7cbe\u9009</b>\n\n' + html.escape(pick["title"]) + '\n\n\u70b9\u51fb\u67e5\u770b\u8be6\u60c5 \u2192',
                         parse_mode="HTML",
                         reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("\ud83d\udc40 \u67e5\u770b\u8be6\u60c5", callback_data=f"x_{await store_url(pick['url'], source='xchina')}")
+                            InlineKeyboardButton("\ud83d\udc40 \u67e5\u770b\u8be6\u60c5", callback_data=f"d_{await store_url(pick['url'], source='4khd')}")
                         ]])
                     )
                 except Exception as e:

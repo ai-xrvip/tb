@@ -1,4 +1,4 @@
-"""bot_utils.py — Shared state, constants, and helper functions for the TG Video Search Bot."""
+﻿"""bot_utils.py — Shared state, constants, and helper functions for the TG Video Search Bot."""
 import asyncio
 import html
 import logging
@@ -19,6 +19,13 @@ from database import (
 logger = logging.getLogger(__name__)
 
 # ---- Constants ----
+_SEARCH_TIMEOUTS: dict[str, float] = {
+    "xchina": config.SEARCH_TIMEOUT_XCHINA,
+    "hanime": config.SEARCH_TIMEOUT_HANIME,
+    "jav": config.SEARCH_TIMEOUT_JAV,
+    "oumei": config.SEARCH_TIMEOUT_OUMEI,
+    "jav_id": 8.0,
+}
 RESULTS_PER_PAGE: int = 5
 URL_TTL: int = 3600
 USER_STATE_TTL: int = 1800
@@ -26,23 +33,17 @@ RATE_LIMIT_WINDOW: int = 60
 RATE_LIMIT_MAX: int = config.MAX_SEARCHES_PER_MINUTE
 _ONE_DAY: int = 86400
 
-# ---- Category info ----
-CATEGORY_LABELS = {
-    "all": "全部",
-    "guochan": "国产",
-    "hanime": "里番",
-    "jav": "日韩",
-    "oumei": "欧美",
-    "jav_id": "番号",
-}
+# ---- Category info (from scrapers) ----
+from scrapers.__init__ import CATEGORY_LABEL_MAP as _SRC_CAT_LABELS
+
+CATEGORY_LABELS = dict(_SRC_CAT_LABELS)
 
 CATEGORY_BUTTONS = [
-    [InlineKeyboardButton("🇨🇳 国产", callback_data="cat_guochan"),
-     InlineKeyboardButton("🇯🇵 日韩", callback_data="cat_jav"),
-     InlineKeyboardButton("🎨 里番", callback_data="cat_hanime"),
-     InlineKeyboardButton("🌍 欧美", callback_data="cat_oumei")],
-    [InlineKeyboardButton("📡 番号", callback_data="cat_jav_id"),
-     InlineKeyboardButton("🌐 全部源", callback_data="cat_all")],
+    [InlineKeyboardButton("全部", callback_data="cat_all"),
+     InlineKeyboardButton("国产", callback_data="cat_guochan"),
+     InlineKeyboardButton("日韩", callback_data="cat_jav"),
+     InlineKeyboardButton("欧美", callback_data="cat_oumei"),
+     InlineKeyboardButton("番号", callback_data="cat_jav_id")],
 ]
 
 PURCHASE_URL: str = "https://t.me/xiuren88bot?start=buy_524"
@@ -58,7 +59,6 @@ ALL_USERS: set[int] = set()
 INVITES: dict[str, str] = {}
 _user_search_times: dict[int, list[float]] = defaultdict(list)
 
-# Current category filter per user
 user_category: dict[int, str] = {}
 admin_setvip_state: dict[int, bool] = {}
 
@@ -109,44 +109,53 @@ ADMIN_IDS: set[int] = config.ADMIN_IDS
 
 # ---- Keyboards ----
 MENU_KEYBOARD = ReplyKeyboardMarkup([
-    [KeyboardButton("🔍 搜索"), KeyboardButton("👑 VIP"), KeyboardButton("👤 我的")],
+    [KeyboardButton("🔍 搜索"), KeyboardButton("💎 VIP"), KeyboardButton("🙋 我的")],
     [KeyboardButton("📖 帮助")],
 ], resize_keyboard=True)
 
-START_TEXT: str = """<b>🎬 TG视频搜索姬 🎬</b>
+START_TEXT: str = """<b>🚀 TG视频搜索Bot 🚀</b>
 
-👋 主人好呀～我是你的专属视频小助手！
+💢 主人好呀～我是你的专属视频小助手！
 
-🎀 <b>我能做什么？</b>
-• 🔍 海量视频随意搜（国产/日韩/里番/欧美/番号）
-• 🎲 支持切换分类搜索
-• 📱 直接播放视频
+📰 <b>我能做什么？</b>
+• 🔍 海量视频随意搜（全部/国产/日韩/欧美/番号）
+• 📫 点击结果直接播放视频
 
-💕 资源每日更新，再也不怕片荒啦～
-
-👇 点击下方按钮开始探索吧！"""
+💞 点击下方按钮开始探索吧！"""
 
 START_KEYBOARD = InlineKeyboardMarkup([
     [InlineKeyboardButton("🔍 搜索视频", callback_data="menu_search")],
-    [InlineKeyboardButton("👑 开通VIP", callback_data="menu_vip")],
+    [InlineKeyboardButton("💎 开通VIP", callback_data="menu_vip")],
     [InlineKeyboardButton("📖 使用帮助", callback_data="menu_help")],
 ])
 
-VIP_TEXT: str = """<b>👑 VIP 会员说明</b>
+VIP_TEXT: str = """<b>💎 VIP 会员说明</b>
 
-🎯 <b>VIP 特权：</b>
+🛆 <b>VIP 特权：</b>
 • 无限次搜索
 • 查看完整搜索结果
 • 翻页浏览所有结果
 • 优先体验新功能
 
-💰 联系管理员购买卡密～"""
+💵 联系管理员购买卡密～"""
 
 
 # ========== Helper functions ==========
 
 def now_ts() -> float:
     return datetime.now().timestamp()
+
+
+async def safe_search_wrapper(name: str, coro):
+    timeout = _SEARCH_TIMEOUTS.get(name, 8.0)
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("%s search timed out after %ss", name, timeout)
+        return []
+    except Exception as e:
+        logger.error("%s search error: %s", name, e)
+        return []
 
 
 async def cleanup_url_store() -> None:
@@ -265,8 +274,7 @@ def format_duration(seconds: int) -> str:
 
 
 async def build_search_keyboard(user_id: int, extra_buttons=None):
-    """Build inline keyboard with hot keywords and category buttons."""
-    from database import db_get_user_history
+    """Build inline keyboard with category buttons and hot keywords."""
     buttons = []
     buttons.append(CATEGORY_BUTTONS[0])
 
@@ -274,7 +282,7 @@ async def build_search_keyboard(user_id: int, extra_buttons=None):
     if history:
         hist_row = []
         for kw in history[:3]:
-            hist_row.append(InlineKeyboardButton("🕐 %s" % kw, callback_data="hot_%s" % html.escape(kw)))
+            hist_row.append(InlineKeyboardButton("🔄 %s" % kw, callback_data="hot_%s" % html.escape(kw)))
         if hist_row:
             buttons.append(hist_row)
 

@@ -16,7 +16,7 @@ from database import (
     db_vip_count, db_vip_permanent_count, db_user_count,
     db_get_stats_last_days, db_get_user_history,
     db_delete_expired_vip,
-    db_load_cards, db_activate_card,
+    db_load_cards, db_activate_card, db_save_card,
 )
 from scraper import get_random_gallery
 import asyncio, html, logging, re, secrets, string, traceback
@@ -34,6 +34,12 @@ async def cmd_start(update, context):
         ALL_USERS.add(user_id)
         asyncio.create_task(db_add_user(user_id))
         asyncio.create_task(db_bump_stat(datetime.now().strftime("%Y-%m-%d"), "new_users"))
+        # Optional free trial for brand-new users (FREE_TRIAL_DAYS > 0).
+        # Note: permanent VIP is stored as None, so membership must be checked
+        # via `user_id in VIP_USERS` (a missing key means "not a VIP at all").
+        if config.FREE_TRIAL_DAYS > 0 and user_id not in VIP_USERS:
+            VIP_USERS[user_id] = now_ts() + config.FREE_TRIAL_DAYS * 86400
+            asyncio.create_task(db_save_vip(user_id, VIP_USERS[user_id]))
         # Check invite: if started with /start INVITE_CODE, grant reward
         if context.args:
             code = context.args[0]
@@ -72,6 +78,11 @@ async def cmd_start(update, context):
                     asyncio.create_task(db_save_vip(user_id, VIP_USERS[user_id]))
     await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
+    # Deep link from inline mode: ?start=search_<keyword> → run the search directly
+    if context.args and context.args[0].startswith("search_"):
+        kw = context.args[0][len("search_"):].strip()
+        if kw:
+            await _do_search(update, kw)
 
 async def cmd_setvip(update, context):
     user_id = update.effective_user.id
@@ -217,6 +228,84 @@ async def cmd_report(update, context):
     text += f"\n🔑 卡密: 已用{await db_card_count_used()}/{await db_card_count_total()}"
     await update.message.reply_text(text, parse_mode="HTML")
 
+async def cmd_broadcast(update, context):
+    """Admin only: one-time update push to every non-VIP user."""
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    text = " ".join(context.args).strip()
+    if not text:
+        await update.message.reply_text(
+            "用法: /broadcast <推送内容>\n\n"
+            "将向所有普通用户（非VIP）发送一次更新通知。\n"
+            "示例: /broadcast 🎉 新版本上线！免费用户每日可搜索10次，开通VIP无限搜～")
+        return
+    # HTML 模式下裸 URL 不会自动变成可点击链接，统一转成带文案的购买链接
+    if PURCHASE_URL in text and f'<a href="{PURCHASE_URL}">' not in text:
+        text = text.replace(PURCHASE_URL, f'<a href="{PURCHASE_URL}">点击开通会员</a>')
+    targets = [uid for uid in ALL_USERS if uid not in VIP_USERS]
+    ok = 0
+    failed = 0
+    for uid in targets:
+        try:
+            await context.bot.send_message(chat_id=uid, text=text, parse_mode="HTML")
+            ok += 1
+        except Exception:
+            try:
+                await context.bot.send_message(chat_id=uid, text=text)
+                ok += 1
+            except Exception:
+                failed += 1
+        await asyncio.sleep(0.05)
+    await update.message.reply_text(
+        f"✅ 广播完成\n目标用户: {len(targets)}\n成功: {ok}\n失败: {failed}")
+
+async def cmd_addcards(update, context):
+    """Admin only: bulk-import card codes. Usage: /addcards <类型> <天数> <卡密...>"""
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    args = context.args or []
+    if len(args) < 3:
+        await update.message.reply_text(
+            "用法: /addcards <类型> <天数> <卡密...>\n\n"
+            "类型: trial 体验卡 / month 月卡 / quarter 季卡 / year 年卡 / forever 永久\n"
+            "天数: 数字（forever 填 0）\n"
+            "示例: /addcards trial 30 Y-HN5MDAYL7Y3 Y-B7Q4LMZ3A3X")
+        return
+    card_type = args[0].lower()
+    valid_types = {"trial", "month", "quarter", "year", "forever"}
+    if card_type not in valid_types:
+        await update.message.reply_text("❌ 类型无效，可选: trial / month / quarter / year / forever")
+        return
+    try:
+        days = int(args[1])
+    except ValueError:
+        await update.message.reply_text("❌ 天数必须是数字（forever 填 0）")
+        return
+    if days <= 0 and card_type != "forever":
+        await update.message.reply_text("❌ 非永久卡的天数必须大于 0")
+        return
+    if card_type == "forever":
+        days = 0
+    code_re = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{3,31}$")
+    ok = 0
+    skipped = 0
+    invalid = []
+    for code in args[2:]:
+        code = code.strip()
+        if not code_re.match(code):
+            invalid.append(code)
+            continue
+        if await db_save_card(code, card_type, days if days > 0 else None, user_id):
+            ok += 1
+        else:
+            skipped += 1
+    reply = f"✅ 导入完成\n新增: {ok} 张 | 跳过: {skipped + len(invalid)} 张"
+    if invalid:
+        reply += "\n无效格式: " + " ".join(invalid[:5])
+    await update.message.reply_text(reply)
+
 async def cmd_my(update, context):
     user_id = update.effective_user.id
     if is_vip(user_id):
@@ -244,9 +333,10 @@ async def cmd_my(update, context):
             reply_markup=InlineKeyboardMarkup(reply_buttons))
     else:
         await update.message.reply_text(
-            "👑 <b>VIP会员</b>\n\n你还不是VIP会员哦～\n开通后可以：\n• 查看全部搜索结果\n• 翻页浏览所有图片\n• 收藏喜欢的图集",
+            "👑 <b>VIP会员</b>\n\n你还不是VIP会员哦～\n开通后可以：\n• 查看全部搜索结果\n• 翻页浏览所有图片\n• 获取下载链接",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⭐ 收藏夹", callback_data="fav_list")],
                 [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
                 [InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)],
                 [InlineKeyboardButton("🔗 邀请好友得VIP", callback_data="invite_info")],
@@ -264,33 +354,7 @@ async def cmd_help(update, context):
         parse_mode="HTML"
     )
 
-# ---- Shared hot-keyword button builder ----
-async def build_hot_keyword_keyboard(extra_buttons=None, for_results=False, user_id: int = None):
-    """Build inline keyboard of hot keyword buttons plus user's search history."""
-    from scraper import get_hot_keywords
-    buttons = []
-    # User's recent search history
-    if user_id is not None:
-        history = await db_get_user_history(user_id, limit=6)
-        if history:
-            hist_row = []
-            for kw in history[:3]:
-                hist_row.append(InlineKeyboardButton(f"🕐 {kw}", callback_data=f"hot_{html.escape(kw)}"))
-            if hist_row:
-                buttons.append(hist_row)
-    # Hot keywords
-    hot = await get_hot_keywords(top_n=8)
-    row = []
-    for kw in hot:
-        row.append(InlineKeyboardButton(kw, callback_data=f"hot_{html.escape(kw)}"))
-        if len(row) >= 4:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-    if extra_buttons:
-        buttons.extend(extra_buttons)
-    return InlineKeyboardMarkup(buttons)
+# ---- Shared hot-keyword button builder (from bot_utils) ----
 
 async def cmd_search(update, context):
     user_id = update.effective_user.id

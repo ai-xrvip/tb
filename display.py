@@ -51,6 +51,31 @@ async def _show_results_page(msg_or_query, user_id, is_update=False):
             title=display_title, source=r.get("source", ""))
         prefix = "e_" if r.get("source") == "ehentai" else ("x_" if r.get("source") == "xchina" else "d_")
         buttons.append([InlineKeyboardButton(f"📷 {idx}. {btn_label}", callback_data=prefix + url_key)])
+    # First display only: send cover thumbnails so free users see the actual content
+    if not is_update:
+        try:
+            sem = get_download_sem()
+            async def _dl_cover(r):
+                cover_url = r.get("cover")
+                if not cover_url:
+                    return None
+                async with sem:
+                    return await download_image(cover_url, referer=r.get("url", ""))
+            cover_tasks = [_dl_cover(r) for r in page_results[:5]]
+            cover_results = await asyncio.gather(*cover_tasks)
+            covers = []
+            for img in cover_results:
+                if img:
+                    img_data, _ = img
+                    img_data.seek(0)
+                    covers.append(InputMediaPhoto(media=img_data))
+            if covers:
+                chat_id = msg_or_query.chat_id if hasattr(msg_or_query, "chat_id") else msg_or_query.message.chat_id
+                await msg_or_query.get_bot().send_media_group(chat_id=chat_id, media=covers)
+        except Exception:
+            logger.debug("Cover album failed: " + traceback.format_exc())
+    if not is_vip_user and state.get("quota_left") is not None:
+        text += f"\n🆓 今日剩余免费搜索 <b>{state['quota_left']}</b> 次 · 开通VIP无限搜\n"
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"p_{page-1}"))
@@ -67,7 +92,18 @@ async def _show_results_page(msg_or_query, user_id, is_update=False):
     # Progressive indicator for updates
     if is_update:
         text += "\n📡 <i>正在获取更多来源...</i>"
-    await send_or_edit(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
+        tracked_msg_id = state.get("results_msg_id")
+        if tracked_msg_id:
+            try:
+                chat_id = msg_or_query.chat_id if hasattr(msg_or_query, "chat_id") else msg_or_query.message.chat_id
+                await msg_or_query.get_bot().edit_message_text(
+                    chat_id=chat_id, message_id=tracked_msg_id,
+                    text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+                return None
+            except Exception:
+                pass
+    sent = await send_or_edit(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
+    return sent
 
 async def _send_xchina_detail(update, url, author="", publish_date="", from_random=False):
     user_id = update.effective_user.id
@@ -93,14 +129,15 @@ async def _send_xchina_detail(update, url, author="", publish_date="", from_rand
     text = f"🎀 {html.escape(display_title)}"
     if count: text += f"\n📸 {count}P"
     if final_date: text += f"\n🕐 {final_date}"
+    if not is_vip(user_id) and count and count > config.FREE_PREVIEW_IMAGES:
+        text += f"\n🔒 剩余 {count - config.FREE_PREVIEW_IMAGES} 张 · 👑 VIP解锁全部"
     url_key = await store_url(url, title=display_title, source="xchina")
     buttons = []
     if images:
         buttons.append([InlineKeyboardButton("🖼️ 查看完整图集", callback_data="f_" + url_key)])
     if from_random:
         buttons.append([InlineKeyboardButton("🔄 换一个", callback_data="random_next")])
-    if is_vip(user_id):
-        buttons.append([InlineKeyboardButton("⭐ 收藏", callback_data="fav_add_" + url_key)])
+    buttons.append([InlineKeyboardButton("⭐ 收藏", callback_data="fav_add_" + url_key)])
     buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
     sent = False
@@ -140,15 +177,16 @@ async def _send_eh_detail(update, url, publish_date="", from_random=False):
     if count: text += f"\n📸 {count}P"
     if publish_date: text += f"\n🕐 {publish_date}"
     if tags: text += "\n🏷 " + ", ".join(tags[:8])
+    if not is_vip(user_id) and count and count > config.FREE_PREVIEW_IMAGES:
+        text += f"\n🔒 剩余 {count - config.FREE_PREVIEW_IMAGES} 张 · 👑 VIP解锁全部"
     url_key = await store_url(url, title=clean_title_str, source="ehentai")
     buttons = []
     if images:
         buttons.append([InlineKeyboardButton("🖼️ 查看图集预览", callback_data="f_" + url_key)])
     if from_random:
         buttons.append([InlineKeyboardButton("🔄 换一个", callback_data="random_next")])
-    if is_vip(user_id):
-        buttons.append([InlineKeyboardButton("🧲 获取磁力链", callback_data="m_" + url_key)])
-        buttons.append([InlineKeyboardButton("⭐ 收藏", callback_data="fav_add_" + url_key)])
+    buttons.append([InlineKeyboardButton("🧲 获取磁力链", callback_data="m_" + url_key)])
+    buttons.append([InlineKeyboardButton("⭐ 收藏", callback_data="fav_add_" + url_key)])
     buttons.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
     cover_bytes = None
@@ -200,12 +238,14 @@ async def _send_gallery_detail(update, url, gallery_data=None, from_random=False
     clean_title_str = clean_title(title)
     text = f"🎀 {html.escape(clean_title_str)}\n📸 {display_count}张"
     if publish_date: text += f"\n🕐 {publish_date}"
+    if not is_vip(user_id) and display_count > config.FREE_PREVIEW_IMAGES:
+        text += f"\n🔒 剩余 {display_count - config.FREE_PREVIEW_IMAGES} 张 · 👑 VIP解锁全部"
     url_key = await store_url(url, title=clean_title_str, source="4khd")
     buttons = [[InlineKeyboardButton("🖼️ 查看完整图集", callback_data="f_" + url_key)]]
     if from_random:
         buttons.append([InlineKeyboardButton("🔄 换一个", callback_data="random_next")])
-    if is_vip(user_id):
-        buttons.append([InlineKeyboardButton("⭐ 收藏", callback_data="fav_add_" + url_key)])
+    buttons.append([InlineKeyboardButton("⭐ 收藏", callback_data="fav_add_" + url_key)])
+    buttons.append([InlineKeyboardButton("🔗 获取下载链接", callback_data="d4_" + url_key)])
     buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
     sent = False
@@ -232,7 +272,7 @@ async def _send_gallery_full(update, url):
     is_xchina = "/photo/id-" in url
     if is_ehentai:
         try:
-            max_imgs = 200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES
             eh_data = await get_eh_gallery(url, max_images=max_imgs)
         except Exception:
             logger.error("EH full gallery error: " + traceback.format_exc())
@@ -253,8 +293,8 @@ async def _send_gallery_full(update, url):
                 actual_count = 0
                 actual_images = []
             max_imgs = min(
-                200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST,
-                actual_count if actual_count > 0 else (200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST),
+                200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES,
+                actual_count if actual_count > 0 else (200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES),
             )
             if actual_images:
                 all_images = actual_images[:max_imgs]
@@ -265,7 +305,7 @@ async def _send_gallery_full(update, url):
             return
     else:
         try:
-            max_imgs = 200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES
             gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
         except Exception:
             logger.error("Full gallery error: " + traceback.format_exc())
@@ -302,7 +342,10 @@ async def _send_gallery_full(update, url):
         buttons.append([InlineKeyboardButton("👑 VIP查看完整图集", callback_data="vip_upgrade")])
     buttons.append([InlineKeyboardButton("🏠 主菜单", callback_data="menu_home")])
     keyboard = InlineKeyboardMarkup(buttons)
-    await update.effective_message.reply_text(f"📸 第1/{total_pages}页（{downloaded}张）", reply_markup=keyboard)
+    if is_vip(user_id):
+        await update.effective_message.reply_text(f"📸 第1/{total_pages}页（{downloaded}张）", reply_markup=keyboard)
+    else:
+        await update.effective_message.reply_text(f"🔒 免费预览 {downloaded} 张 · 👑 VIP可查看完整图集", reply_markup=keyboard)
 
 async def _send_gallery_page(update, url, page=0):
     user_id = update.effective_user.id
@@ -311,7 +354,7 @@ async def _send_gallery_page(update, url, page=0):
     is_xchina = "/photo/id-" in url
     if is_ehentai:
         try:
-            max_imgs = 200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES
             eh_data = await get_eh_gallery(url, max_images=max_imgs)
         except Exception:
             await update.effective_message.reply_text("❌ 加载EH图集失败")
@@ -331,8 +374,8 @@ async def _send_gallery_page(update, url, page=0):
                 actual_count = 0
                 actual_images = []
             max_imgs = min(
-                200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST,
-                actual_count if actual_count > 0 else (200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST),
+                200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES,
+                actual_count if actual_count > 0 else (200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES),
             )
             if actual_images:
                 all_images = actual_images[:max_imgs]
@@ -343,7 +386,7 @@ async def _send_gallery_page(update, url, page=0):
             return
     else:
         try:
-            max_imgs = 200 if is_vip(user_id) else config.MAX_IMAGES_PER_POST
+            max_imgs = 200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES
             gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
         except Exception:
             await update.effective_message.reply_text("😔 加载失败，请稍后再试。")

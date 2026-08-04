@@ -6,3 +6,20 @@ __pycache__/
 *.log
 railway.env
 find_eh.js
+
+# Secrets - never commit
+CREDENTIALS.md
+
+# Local SQLite DB / backups / logs
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/backups/
+
+# Node deps (not used by the Python app)
+node_modules/
+
+# Scratch / dev files
+10
+_fix*.js
+_test_4khd.py

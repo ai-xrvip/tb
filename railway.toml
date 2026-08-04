@@ -3,6 +3,8 @@ builder = "DOCKERFILE"
 
 [deploy]
 restartPolicyType = "ALWAYS"
+healthcheckPath = "/health/ready"
+numReplicas = 1
 
 # Persistent volume for SQLite database, backups, and logs
 [deploy.volumes]

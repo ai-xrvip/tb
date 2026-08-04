@@ -1,8 +1,6 @@
-[build]
-builder = "DOCKERFILE"
+﻿[build]
+  builder = "DOCKERFILE"
+  dockerfilePath = "/Dockerfile"
 
 [deploy]
-restartPolicyType = "ALWAYS"
-
-[deploy.volumes]
-data = "/app/data"
+  restartPolicyType = "ALWAYS"

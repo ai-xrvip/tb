@@ -1,4 +1,4 @@
-"""handlers_text.py — Free-form text message handler for TG Video Search Bot"""
+﻿"""handlers_text.py — Free-form text message handler for TG Video Search Bot"""
 import asyncio
 import logging
 
@@ -11,8 +11,8 @@ from bot_utils import (
     PURCHASE_URL, _ONE_DAY, VIP_TEXT, build_search_keyboard,
     save_vip_db,
 )
-from handlers_commands import cmd_my, cmd_help
 from handlers_search import _do_search
+from handlers_commands import cmd_my, cmd_help
 from config import config
 from database import (
     db_add_user, db_activate_card, db_save_vip,
@@ -43,7 +43,7 @@ async def handle_text(update, context):
                 ALL_USERS.add(target_id)
                 asyncio.create_task(db_add_user(target_id))
             await update.message.reply_text(
-                "✅ 已将用户 <code>%s</code> 设置为VIP（%s）" % (target_id, label),
+                "✅ 已将用户 <code>%s</code> 设置为VIP：%s" % (target_id, label),
                 parse_mode="HTML")
         except ValueError:
             await update.message.reply_text("❌ 请输入有效的用户ID（数字）")
@@ -56,16 +56,16 @@ async def handle_text(update, context):
             [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")],
         ])
         await update.message.reply_text(
-            "🔍 请直接输入搜索关键词～\n\n📂 点击上方分类按钮切换源：",
+            "🔍 请直接输入搜索关键词～\n📨 点击上方分类按钮切换源：",
             parse_mode="HTML",
             reply_markup=keyboard)
         return
-    elif text == "👑 VIP":
+    elif text == "💎 VIP":
         user_waiting_search.discard(user_id)
         user_waiting_card.discard(user_id)
         if is_vip(user_id):
             await update.message.reply_text(
-                "<b>👑 你已是VIP会员</b>\n\n🎉 享受所有特权～",
+                "<b>💎 你已是VIP会员</b>\n\n🎀 享受所有特权～",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
@@ -73,12 +73,12 @@ async def handle_text(update, context):
         else:
             await update.message.reply_text(VIP_TEXT, parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔑 输入卡密激活", callback_data="vip_activate")],
-                    [InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)],
+                    [InlineKeyboardButton("🔽 输入卡密激活", callback_data="vip_activate")],
+                    [InlineKeyboardButton("💰 购买卡密", url=PURCHASE_URL)],
                     [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")]
                 ]))
         return
-    elif text == "👤 我的":
+    elif text == "🙋 我的":
         user_waiting_search.discard(user_id)
         user_waiting_card.discard(user_id)
         await cmd_my(update, context)
@@ -93,7 +93,7 @@ async def handle_text(update, context):
         user_waiting_card.discard(user_id)
         if is_vip(user_id):
             await update.message.reply_text(
-                "❗ 你已经是VIP会员了。如需续费请使用新卡密。",
+                "❌ 你已经是VIP会员了。如需续费请使用新卡密。",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
                 ]]))
@@ -105,7 +105,7 @@ async def handle_text(update, context):
             await update.message.reply_text(
                 "❌ 卡密无效或已被使用。",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔑 重新输入", callback_data="vip_activate"),
+                    InlineKeyboardButton("🔽 重新输入", callback_data="vip_activate"),
                     InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
                 ]]))
             return
@@ -117,7 +117,7 @@ async def handle_text(update, context):
             await update.message.reply_text(
                 "⚠️ 卡密格式无效，请确认卡密正确。",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🌔 返回主菜单", callback_data="menu_home")
+                    InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
                 ]]))
             return
         days_map = {"month": 30, "quarter": 90, "year": 360, "forever": None}
@@ -147,6 +147,13 @@ async def handle_text(update, context):
             return
         category = user_category.get(user_id, "all")
         await _do_search(update, keyword, category)
+        return
+
+    if text and len(text) >= 1:
+        user_waiting_search.discard(user_id)
+        user_waiting_card.discard(user_id)
+        category = user_category.get(user_id, "all")
+        await _do_search(update, text, category)
         return
 
     return

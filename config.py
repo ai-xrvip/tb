@@ -1,4 +1,4 @@
-"""Configuration for 4KHD Search Bot"""
+﻿"""Configuration for 4KHD Search Bot"""
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -15,13 +15,13 @@ class Config:
     # Search settings
     MAX_SEARCH_RESULTS: int = int(os.getenv("MAX_SEARCH_RESULTS", "30"))
     MAX_PAGES_PER_POST: int = int(os.getenv("MAX_PAGES_PER_POST", "3"))
-    MAX_IMAGES_PER_POST: int = int(os.getenv("MAX_IMAGES_PER_POST", "20"))
+    MAX_IMAGES_PER_POST: int = int(os.getenv("MAX_IMAGES_PER_POST", "10"))
 
     # Site settings
     BASE_URL: str = "https://www.4khd.com"
     SEARCH_URL: str = "https://www.4khd.com/?s={keyword}"
 
-    # HTTP — per-source timeouts (seconds)
+    # HTTP 鈥?per-source timeouts (seconds)
     REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "8"))
     SEARCH_TIMEOUT_4KHD: float = float(os.getenv("SEARCH_TIMEOUT_4KHD", "8.0"))
     SEARCH_TIMEOUT_XC: float = float(os.getenv("SEARCH_TIMEOUT_XC", "6.0"))
@@ -48,6 +48,17 @@ class Config:
 
     # Rate limiting
     MAX_SEARCHES_PER_MINUTE: int = int(os.getenv("MAX_SEARCHES_PER_MINUTE", "10"))
+
+    # Free tier: daily search quota for non-VIP users (0 = unlimited)
+    FREE_DAILY_SEARCHES: int = int(os.getenv("FREE_DAILY_SEARCHES", "10"))
+    # Free trial days granted on first /start (0 = disabled)
+    FREE_TRIAL_DAYS: int = int(os.getenv("FREE_TRIAL_DAYS", "0"))
+    # Free tier: images visible per gallery for non-VIP users
+    FREE_PREVIEW_IMAGES: int = int(os.getenv("FREE_PREVIEW_IMAGES", "5"))
+    # Scale/marketing line shown on the start screen (marketing copy, can be tuned)
+    SCALE_TEXT: str = os.getenv("SCALE_TEXT", "📚 已收录 90万+ 套图集 · 3800万+ 张高清图片 · 每日更新")
+    # VIP pricing line shown in paywall copy (e.g. "?? ?29.9 / ?? ?69 / ?? ?499")
+    VIP_PRICE_TEXT: str = os.getenv("VIP_PRICE_TEXT", "")
 
     # E-Hentai cookies
     EH_MEMBER_ID: str = os.getenv("EH_MEMBER_ID", "")

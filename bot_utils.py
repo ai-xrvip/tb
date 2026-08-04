@@ -38,6 +38,7 @@ EH_ENABLED: bool = bool(config.EH_MEMBER_ID and config.EH_PASS_HASH)
 # ---- State ----
 user_search_state: dict = {}
 user_waiting_search: set[int] = set()
+user_search_prompt_msg: dict[int, int] = {}
 url_store: dict = {}
 admin_setvip_state: dict[int, bool] = {}
 url_counter: int = 0
@@ -56,7 +57,7 @@ _invite_lock: asyncio.Lock | None = None
 _vip_lock: asyncio.Lock | None = None
 
 
-def init_locks() -> None:
+def init_locks():
     global _url_store_lock, _url_counter_lock, _user_search_lock, _download_sem, _invite_lock, _vip_lock
     if _url_store_lock is None:
         _url_store_lock = asyncio.Lock()
@@ -104,17 +105,16 @@ MENU_KEYBOARD = ReplyKeyboardMarkup([
     [KeyboardButton("📖 帮助")],
 ], resize_keyboard=True)
 
-START_TEXT: str = """<b>✨ 美少女图集搜索姬 ✨</b>
-
-👋 主人好呀～我是你的专属图集小助手！
-
-🎀 <b>我能做什么？</b>
-• 🔍 海量 Cosplay、写真、自拍图集随意搜
-• 🎲 不知道看什么？试试随机推荐
-
-💕 资源每日更新，再也不怕片荒啦～
-
-👇 点击下方按钮开始探索吧！"""
+START_TEXT: str = (
+    "<b>✨ 美少女图集搜索姬 ✨</b>\n\n"
+    "👋 主人好呀～我是你的专属图集小助手！\n\n"
+    f"📚 <b>资源规模</b>\n{config.SCALE_TEXT}\n\n"
+    "🎀 <b>我能做什么？</b>\n"
+    "• 🔍 海量 Cosplay、写真、自拍图集随意搜\n"
+    "• 🎲 不知道看什么？试试随机推荐\n\n"
+    "💕 资源每日更新，再也不怕片荒啦～\n\n"
+    "👇 点击下方按钮开始探索吧！"
+)
 
 START_KEYBOARD = InlineKeyboardMarkup([
     [InlineKeyboardButton("🔍 搜索图集", callback_data="menu_search")],
@@ -123,19 +123,38 @@ START_KEYBOARD = InlineKeyboardMarkup([
     [InlineKeyboardButton("📖 使用帮助", callback_data="menu_help")],
 ])
 
-VIP_TEXT: str = """<b>👑 VIP 会员说明</b>
-
-🎯 <b>VIP 特权：</b>
-• 无限次搜索
-• 查看完整大图集
-• 翻页浏览所有图片
-• 收藏喜欢的图集
-• 优先体验新功能
-
-🚧 功能开发中，敬请期待～"""
+VIP_TEXT: str = (
+    "<b>👑 VIP 会员特权</b>\n\n"
+    "• 无限次搜索（免费用户每日有限额）\n"
+    f"• 查看完整大图集（免费仅预览{config.FREE_PREVIEW_IMAGES}张）\n"
+    "• 翻页浏览全部图片\n"
+    "• 获取 TeraBox 下载链接 / EH 磁力链\n"
+    "• 关键词订阅 & 更新推送\n\n"
+    + (f"💰 {config.VIP_PRICE_TEXT}\n\n" if config.VIP_PRICE_TEXT else "")
+    + "👇 点击下方按钮，立即开通！"
+)
 
 _ONE_DAY: int = 86400
 PURCHASE_URL: str = "https://t.me/xiuren88bot?start=buy_524"
+
+VIP_CTA_TEXT: str = (
+    "<b>👑 开通VIP，畅享全部特权</b>\n\n"
+    "• 无限次搜索（无每日次数限制）\n"
+    "• 查看完整大图集（200张高清）\n"
+    "• 获取 TeraBox 下载链接\n"
+    "• 关键词订阅 & 更新推送\n\n"
+    + (f"💰 {config.VIP_PRICE_TEXT}\n\n" if config.VIP_PRICE_TEXT else "")
+    + "💳 购买卡密后，点击下方按钮输入卡密即可秒开～"
+)
+
+
+def vip_cta_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)],
+        [InlineKeyboardButton("🔑 我有卡密，输入激活", callback_data="vip_activate")],
+        [InlineKeyboardButton("🔗 邀请好友得VIP", callback_data="invite_info")],
+        [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")],
+    ])
 
 # ── Context sync helper ─────────────────────────────────────────
 # Called by bot.py after loading data from DB into BotContext.
@@ -306,13 +325,14 @@ async def send_or_edit(msg_or_query, text: str, reply_markup=None, parse_mode: s
     from telegram import Message  # noqa: F811
     try:
         if isinstance(msg_or_query, Message):
-            await msg_or_query.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            return await msg_or_query.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
         else:
-            await msg_or_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            return await msg_or_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except Exception as e:
         err_str = str(e)
         if "not modified" not in err_str.lower():
             logger.warning(f"send_or_edit failed: {err_str}")
+        return None
 
 
 async def safe_search_wrapper(name: str, coro):
@@ -329,7 +349,7 @@ async def safe_search_wrapper(name: str, coro):
 
 # ========== Title dedup ==========
 
-def dedup_results(results: list[dict], threshold: float = 0.80) -> list[dict]:
+def dedup_results(results: list[dict], threshold: float = 0.95) -> list[dict]:
     import difflib
     kept: list[dict] = []
     for r in results:
@@ -376,19 +396,27 @@ def quality_score(r: dict) -> float:
 
 # ========== Hot keyword keyboard ==========
 
+def _safe_callback(prefix: str, value: str, max_bytes: int = 64) -> str:
+    """Build a callback-data string that fits Telegram's 64-byte limit."""
+    data = prefix + value
+    while data and len(data.encode("utf-8")) > max_bytes:
+        data = data[:-1]
+    return data
+
+
 async def build_hot_keyword_keyboard(extra_buttons=None, user_id: int | None = None):
     from scraper import get_hot_keywords
     buttons: list[list] = []
     if user_id is not None:
         history = await db_get_user_history(user_id, limit=6)
         if history:
-            hist_row = [InlineKeyboardButton(f"🕐 {kw}", callback_data=f"hot_{html.escape(kw)}") for kw in history[:3]]
+            hist_row = [InlineKeyboardButton(f"🕐 {kw}", callback_data=_safe_callback("hot_", html.escape(kw))) for kw in history[:3]]
             if hist_row:
                 buttons.append(hist_row)
     hot = await get_hot_keywords(top_n=8)
     row: list = []
     for kw in hot:
-        row.append(InlineKeyboardButton(kw, callback_data=f"hot_{html.escape(kw)}"))
+        row.append(InlineKeyboardButton(kw, callback_data=_safe_callback("hot_", html.escape(kw))))
         if len(row) >= 4:
             buttons.append(row)
             row = []

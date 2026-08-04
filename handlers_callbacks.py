@@ -22,6 +22,7 @@ from database import (
     db_delete_favorite, db_clear_favorites,
 )
 from scraper_eh import get_eh_magnet
+from downloader_4khd import get_4khd_download
 import asyncio, html, logging, re, secrets, string, traceback
 from datetime import datetime
 from typing import Callable, Awaitable
@@ -418,6 +419,44 @@ async def _route_magnet(update, context):
             logger.debug("magnet status msg edit failed (msg may be deleted)")
     asyncio.create_task(_bg_magnet())
 
+@_prefix("d4_")
+async def _route_download_4khd(update, context):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    url = get_url(query.data[3:])
+    if not url:
+        await query.answer("链接已过期", show_alert=True)
+        return
+    if not is_vip(user_id):
+        await query.answer("请先开通VIP会员", show_alert=True)
+        return
+    await query.answer()
+    status_msg = await query.message.reply_text("⏳ 正在后台获取TeraBox下载链接（约25秒），请稍候...")
+    async def _bg_download():
+        try:
+            result = await get_4khd_download(url)
+            if result.get("error"):
+                await status_msg.edit_text(f"❌ 获取下载链接失败：{result['error']}")
+            elif result.get("terabox_url"):
+                text = (
+                    f"📥 <b>TeraBox下载链接</b>\n\n"
+                    f"标题：{html.escape(result.get('title', ''))}\n"
+                    f"链接：<code>{html.escape(result['terabox_url'])}</code>\n"
+                    f"密码：<code>{html.escape(result.get('password', '4KHD'))}</code>\n\n"
+                    f"提示：将链接复制到浏览器打开，输入密码即可下载"
+                )
+                await status_msg.edit_text(text, parse_mode="HTML")
+            else:
+                await status_msg.edit_text("❌ 未能获取下载链接")
+        except Exception as e:
+            logger.warning("4KHD download failed: %s", e)
+            try:
+                await status_msg.edit_text(f"❌ 下载任务异常：{e}")
+            except Exception:
+                pass
+    asyncio.create_task(_bg_download())
+
+
 # Favorites (prefix "fav_")
 
 @_prefix("fav_add_")
@@ -429,9 +468,15 @@ async def _route_fav_add(update, context):
         target_url = entry.get("url", "")
         added = await db_add_favorite(user_id, entry.get("title", "Unknown"), target_url, entry.get("source", ""))
         if added:
-            await query.answer("\u2b50 \u5df2\u6536\u85cf", show_alert=True)
+            await query.answer()
+            msg = await query.message.reply_text("⭐ 已收藏")
+            await asyncio.sleep(3)
+            try:
+                await msg.delete()
+            except Exception:
+                pass
         else:
-            await query.answer("\u2b50 \u5df2\u6536\u85cf\u8fc7", show_alert=True)
+            await query.answer("⭐ 已收藏过", show_alert=True)
 
 @_exact("fav_list")
 async def _route_fav_list(update, context):

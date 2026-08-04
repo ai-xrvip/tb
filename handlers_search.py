@@ -3,13 +3,13 @@ from bot_utils import (
     now_ts, store_url, get_url, clean_title, parse_count_from_title,
     is_vip, check_rate_limit, safe_search_wrapper,
     user_search_state, dedup_results, quality_score,
-    EH_ENABLED, RESULTS_PER_PAGE,
+    EH_ENABLED, RESULTS_PER_PAGE, VIP_CTA_TEXT, vip_cta_keyboard,
 )
 from display import _show_results_page
-from scraper import search_galleries, search_xchina
+from scraper import search_galleries
 from scraper_eh import search_ehentai
 from config import config
-from database import db_bump_stat, db_add_search_history
+from database import db_bump_stat, db_add_search_history, db_bump_search_quota
 import asyncio, html, logging, traceback
 from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -40,11 +40,24 @@ async def _do_search_callback(query, keyword):
     await _run_search_and_display(msg, keyword, user_id, loading, query)
 
 async def _run_search_and_display(msg, keyword, user_id, loading, query=None):
+    # Free tier: consume a daily search slot (VIP is unlimited)
+    quota_left = None
+    if not is_vip(user_id) and config.FREE_DAILY_SEARCHES > 0:
+        today = datetime.now().strftime("%Y-%m-%d")
+        used = await db_bump_search_quota(user_id, today)
+        if used > config.FREE_DAILY_SEARCHES:
+            try:
+                await loading.delete()
+            except Exception:
+                pass
+            await msg.reply_text(VIP_CTA_TEXT, parse_mode="HTML", reply_markup=vip_cta_keyboard())
+            return
+        quota_left = config.FREE_DAILY_SEARCHES - used
+
     hd_task = asyncio.create_task(safe_search_wrapper("4KHD", search_galleries(keyword, max_results=config.MAX_SEARCH_RESULTS)))
-    xc_task = asyncio.create_task(safe_search_wrapper("XChina", search_xchina(keyword, max_results=config.MAX_SEARCH_RESULTS)))
     eh_task = asyncio.create_task(safe_search_wrapper("EH", search_ehentai(keyword, max_results=config.MAX_SEARCH_RESULTS))) if EH_ENABLED else None
 
-    name_map = {hd_task: "4KHD", xc_task: "XChina"}
+    name_map = {hd_task: "4KHD"}
     if eh_task:
         name_map[eh_task] = "EH"
 
@@ -53,15 +66,24 @@ async def _run_search_and_display(msg, keyword, user_id, loading, query=None):
     displayed_once = False
     all_tasks = set(name_map.keys())
 
-    # Progressive display: show first batch at 3s, update as more arrive
+    # Progressive display: collect already-done tasks first, then wait for more
+    collected = set()
     for checkpoint in (3.0, 6.0, None):
-        remaining = all_tasks - {t for t in all_tasks if t.done()}
-        if not remaining:
-            break
-        if checkpoint is not None:
+        # First, grab any tasks that completed since last checkpoint
+        just_done = {t for t in all_tasks if t.done()} - collected
+        if just_done:
+            done_set = just_done
+        elif checkpoint is not None:
+            remaining = all_tasks - collected
+            if not remaining:
+                break
             done_set, _ = await asyncio.wait(remaining, timeout=checkpoint, return_when=asyncio.FIRST_COMPLETED)
         else:
+            remaining = all_tasks - collected
+            if not remaining:
+                break
             done_set, _ = await asyncio.wait(remaining, timeout=None)
+        collected |= done_set
 
         # Collect results from newly done tasks
         for t in done_set:
@@ -91,17 +113,22 @@ async def _run_search_and_display(msg, keyword, user_id, loading, query=None):
             asyncio.create_task(db_bump_stat(datetime.now().strftime("%Y-%m-%d"), "searches"))
 
         # Show or update
-        user_search_state[user_id] = {"page": 0, "keyword": keyword, "results": all_results, "ts": now_ts()}
+        prev_state = user_search_state.get(user_id, {})
+        results_msg_id = prev_state.get("results_msg_id")
+        user_search_state[user_id] = {"page": 0, "keyword": keyword, "results": all_results, "ts": now_ts(), "quota_left": quota_left}
         if not displayed_once:
             # First display — delete loading, show results
             try:
                 await loading.delete()
             except Exception:
                 pass
-            await _show_results_page(query if query else msg, user_id)
+            sent = await _show_results_page(query if query else msg, user_id)
+            if sent and hasattr(sent, "message_id"):
+                user_search_state[user_id]["results_msg_id"] = sent.message_id
             displayed_once = True
         else:
-            # Update existing display
+            # Update existing display — edit tracked results message
+            user_search_state[user_id]["results_msg_id"] = results_msg_id
             await _show_results_page(query if query else msg, user_id, is_update=True)
 
     # If nothing at all
@@ -112,7 +139,7 @@ async def _run_search_and_display(msg, keyword, user_id, loading, query=None):
             pass
         from scraper import get_hot_keywords
         hot = await get_hot_keywords(top_n=5)
-        suggest_btns = [[InlineKeyboardButton(kw, callback_data=f"hot_{html.escape(kw)}")] for kw in hot]
+        suggest_btns = [[InlineKeyboardButton(kw, callback_data=f"hot_{html.escape(kw)[:15]}")] for kw in hot]
         suggest_btns.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
         await msg.reply_text(
             f"😔 没有找到「{html.escape(keyword)}」相关图集\n\n🔥 试试热门搜索：",

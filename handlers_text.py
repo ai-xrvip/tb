@@ -1,5 +1,6 @@
 """handlers_text.py — Free-form text message handler."""
 from bot_utils import (
+    user_search_prompt_msg,
     now_ts, is_vip, check_rate_limit, user_waiting_search, user_waiting_card,
     ADMIN_IDS, VIP_USERS, ALL_USERS, INVITES, admin_setvip_state,
     PURCHASE_URL, _ONE_DAY, VIP_TEXT, build_hot_keyword_keyboard,
@@ -52,10 +53,11 @@ async def handle_text(update, context):
         keyboard = await build_hot_keyword_keyboard([
             [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")],
         ], user_id=user_id)
-        await update.message.reply_text(
+        sent = await update.message.reply_text(
             "🔍 请直接输入搜索关键词～\n\n🔥 <b>热门搜索：</b>",
             parse_mode="HTML",
             reply_markup=keyboard)
+        user_search_prompt_msg[user_id] = sent.message_id
         return
     elif text == "🎲 推荐":
         await cmd_random(update, context)
@@ -91,17 +93,19 @@ async def handle_text(update, context):
             return
 
         card_code = text.strip()
-        if is_vip(user_id):
+        is_current_vip = user_id in VIP_USERS
+        current_expiry = VIP_USERS.get(user_id)
+        if is_current_vip and current_expiry is None:
             await update.message.reply_text(
-                "❗ 你已经是VIP会员了。如需续费请使用新卡密。",
+                "👑 你已是永久会员，无需再激活卡密。",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")
                 ]]))
             return
 
         # Atomic activate — no full-table load, no race condition
-        activated = await db_activate_card(card_code, user_id)
-        if not activated:
+        card = await db_activate_card(card_code, user_id)
+        if not card:
             await update.message.reply_text(
                 "❌ 卡密无效或已被使用。",
                 reply_markup=InlineKeyboardMarkup([[
@@ -110,19 +114,19 @@ async def handle_text(update, context):
                 ]]))
             return
 
-        # Determine card type and expiry from the code prefix
-        prefix = card_code.split("-")[0] if "-" in card_code else ""
-        prefix_type = {"Y": "month", "J": "quarter", "N": "year", "S": "forever"}
-        card_type = prefix_type.get(prefix, "forever")
-        days_map = {"month": 30, "quarter": 90, "year": 360, "forever": None}
-        day_names = {"month": "月卡(30天)", "quarter": "季卡(90天)", "year": "年卡(360天)", "forever": "永久"}
-        days = days_map.get(card_type)
-        expiry = None if days is None else now_ts() + days * 86400
+        # Card type/days come from the DB — never infer from the code prefix
+        card_type = card["card_type"]
+        days = card["days"]
+        day_names = {"month": "月卡(30天)", "quarter": "季卡(90天)", "year": "年卡(360天)", "forever": "永久", "trial": "体验卡"}
+        name = day_names.get(card_type, card_type)
+        expiry = None if days is None or int(days) <= 0 else now_ts() + int(days) * 86400
+        # 已有VIP（试用/未到期卡）激活新卡 → 从当前到期日顺延，不损失剩余时长
+        if expiry is not None and is_current_vip and current_expiry and current_expiry > now_ts():
+            expiry = current_expiry + int(days) * 86400
 
         asyncio.create_task(db_bump_stat(datetime.now().strftime("%Y-%m-%d"), "card_activations"))
         VIP_USERS[user_id] = expiry
         await save_vip_db(user_id, expiry)
-        name = day_names.get(card_type, card_type)
         if days:
             exp_str = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
             msg = f"✅ 卡密激活成功！\n\n类型：{name}\n到期：{exp_str}\n\n返回主菜单即可享受VIP特权！"
@@ -137,6 +141,13 @@ async def handle_text(update, context):
     # Default: any other text → treat as search keyword
     if user_id in user_waiting_search:
         user_waiting_search.discard(user_id)
+        prompt_msg_id = user_search_prompt_msg.pop(user_id, None)
+        if prompt_msg_id:
+            try:
+                await update.message.delete()
+                await update.message.chat.delete_message(prompt_msg_id)
+            except Exception:
+                pass
     elif user_id in user_waiting_card:
         user_waiting_card.discard(user_id)
         await update.message.reply_text(

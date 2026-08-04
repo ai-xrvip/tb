@@ -11,9 +11,12 @@ Supports both webhook (Railway) and polling (dev) modes.
 import asyncio
 import gc
 import logging
+import signal
 import sys
 import os
 import threading
+import time
+import urllib.request
 from datetime import datetime
 
 from telegram import Update
@@ -40,7 +43,7 @@ from pre_cache import start_pre_cache
 # Handler imports
 from handlers_commands import (
     cmd_start, cmd_setvip, cmd_admin, cmd_stats,
-    cmd_my, cmd_help, cmd_search, cmd_random, cmd_report,
+    cmd_my, cmd_help, cmd_search, cmd_random, cmd_report, cmd_broadcast, cmd_addcards,
 )
 from handlers_callbacks import handle_callback
 from handlers_text import handle_text
@@ -53,6 +56,68 @@ from handlers_subs import (
 
 logger = logging.getLogger(__name__)
 
+# ========== Two-Tier Watchdog ==========
+# Tier 1: asyncio heartbeat (heartbeat updated every 60s in polling loop)
+# Tier 2: HTTP health check (pings Flask /health/ready endpoint)
+# If both tiers fail, the process is truly dead, force-kill so Railway restarts the container.
+
+_heartbeat = time.time()
+_shutdown_requested = threading.Event()
+_main_loop_ref = None
+_watchdog_port = int(os.environ.get('PORT', 8000))
+
+def _update_heartbeat():
+    global _heartbeat
+    _heartbeat = time.time()
+
+def _http_health_check():
+    try:
+        req = urllib.request.Request(
+            'http://127.0.0.1:' + str(_watchdog_port) + '/health/ready',
+            method='GET',
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+def _watchdog():
+    http_fail_count = 0
+    while True:
+        time.sleep(60)
+        if _shutdown_requested.is_set():
+            return
+        # Tier 2: HTTP health check
+        if not _http_health_check():
+            http_fail_count += 1
+            if http_fail_count >= 3:
+                logger.critical(
+                    'Watchdog: HTTP health check failed %d times, process is dead. Force-killing...',
+                    http_fail_count,
+                )
+                os.kill(os.getpid(), getattr(signal, "SIGKILL", signal.SIGTERM))
+        else:
+            http_fail_count = 0
+        # Tier 1: asyncio heartbeat
+        if http_fail_count == 0:
+            elapsed = time.time() - _heartbeat
+            if elapsed > 600:
+                logger.critical(
+                    'Watchdog: bot unresponsive for %.0fs, triggering graceful restart',
+                    elapsed,
+                )
+                _shutdown_requested.set()
+                loop = _main_loop_ref
+                if loop is not None and loop.is_running():
+                    def _stop_loop():
+                        try:
+                            for task in asyncio.all_tasks(loop):
+                                task.cancel()
+                        except Exception:
+                            pass
+                        loop.stop()
+                    loop.call_soon_threadsafe(_stop_loop)
+threading.Thread(target=_watchdog, daemon=True, name="watchdog").start()
 # ========== Logging ==========
 
 def _setup_logging():
@@ -62,15 +127,68 @@ def _setup_logging():
         handlers=[logging.StreamHandler(sys.stdout)],
         force=True,
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # ========== Periodic Cleanup ==========
 
 async def _periodic_cleanup(application):
     last_reminder_day = 0
+    last_client_recycle = 0.0
+    last_proxy_cleanup = 0.0
     while True:
         await asyncio.sleep(600)
         await cleanup_all()
         gc.collect()
+        now_ts_val = time.time()
+
+        # Force httpx client recycle every 2 hours to prevent connection leaks
+        if now_ts_val - last_client_recycle > 7200:
+            try:
+                from scraper import _get_client as _sc_get_client
+                from scraper import _client_lock as _sc_client_lock
+                import scraper as _sc
+                async with _sc_client_lock:
+                    if _sc._httpx_client is not None:
+                        try:
+                            await _sc._httpx_client.aclose()
+                        except Exception:
+                            pass
+                        _sc._httpx_client = None
+                last_client_recycle = now_ts_val
+                logger.debug("Periodic httpx client recycled")
+            except Exception as ex:
+                logger.debug("Periodic httpx recycle failed: %s", ex)
+
+        # Clean up stale proxy clients every 1 hour
+        if now_ts_val - last_proxy_cleanup > 3600:
+            try:
+                import scraper as _sc2
+                async with _sc2._proxy_client_lock:
+                    now = time.time()
+                    expired = [p for p, (_, t) in list(_sc2._proxy_clients.items()) if now - t > 300]
+                    for p in expired:
+                        try:
+                            await _sc2._proxy_clients[p][0].aclose()
+                        except Exception:
+                            pass
+                        del _sc2._proxy_clients[p]
+                    if expired:
+                        logger.debug("Cleaned %d stale proxy clients", len(expired))
+                last_proxy_cleanup = now_ts_val
+            except Exception as ex:
+                logger.debug("Periodic proxy cleanup failed: %s", ex)
+
+        # Log memory usage for leak detection
+        try:
+            import psutil
+            proc = psutil.Process()
+            mem_mb = proc.memory_info().rss / 1024 / 1024
+            if mem_mb > 300:
+                logger.warning("High memory usage: %.0f MB", mem_mb)
+        except Exception:
+            pass
+
         today = datetime.now().strftime("%Y%m%d")
         if today != last_reminder_day:
             last_reminder_day = today
@@ -98,9 +216,8 @@ async def _startup(application):
     await start_pre_cache()
 
     # Auto-migrate from JSON if there are old data files
-    import os as _os
-    data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data")
-    if _os.path.isdir(data_dir):
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    if os.path.isdir(data_dir):
         migration_stats = await db_migrate_from_json(data_dir)
         if any(v > 0 for v in migration_stats.values() if isinstance(v, int)):
             logger.info("Auto-migration complete: %s", migration_stats)
@@ -154,6 +271,8 @@ _CMD_HANDLERS = [
     ("admin", cmd_admin),
     ("stats", cmd_stats),
     ("report", cmd_report),
+    ("broadcast", cmd_broadcast),
+    ("addcards", cmd_addcards),
     ("subscribe", cmd_subscribe),
     ("unsubscribe", cmd_unsubscribe),
 ]
@@ -271,19 +390,49 @@ def main():
             logger.warning(f"Flask admin not started: {e}")
 
         async def _start_polling():
+            nonlocal delay
+            global _main_loop_ref
+            _main_loop_ref = asyncio.get_running_loop()
+            _shutdown_requested.clear()
             await app.initialize()  # triggers post_init → _startup → proxy_pool + pre_cache + bg tasks
             await app.start()
             await app.updater.start_polling(allowed_updates=["message", "callback_query", "inline_query"])
             try:
                 while True:
+                    _update_heartbeat()
+                    if _shutdown_requested.is_set():
+                        logger.warning("Watchdog shutdown signal received, restarting...")
+                        break
                     await asyncio.sleep(60)
             except asyncio.CancelledError:
-                await shutdown(app)
+                logger.warning("Polling loop cancelled, shutting down...")
+            finally:
+                try:
+                    await shutdown(app)
+                except Exception:
+                    pass
 
-        try:
-            asyncio.run(_start_polling())
-        except KeyboardInterrupt:
-            asyncio.run(shutdown(app, "SIGINT"))
+        delay = 5
+        max_delay = 60
+        while True:
+            try:
+                asyncio.run(_start_polling())
+                if _shutdown_requested.is_set():
+                    _shutdown_requested.clear()
+                    logger.warning("Restarting after watchdog shutdown...")
+                    time.sleep(3)
+                    continue
+                break
+            except KeyboardInterrupt:
+                try:
+                    asyncio.run(shutdown(app, "SIGINT"))
+                except Exception:
+                    pass
+                break
+            except Exception as e:
+                logger.error(f"Bot crashed, restarting in {delay}s: {e}")
+                time.sleep(delay)
+                delay = min(delay * 2, max_delay)
 
 
 if __name__ == "__main__":

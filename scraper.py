@@ -37,7 +37,7 @@ _CLICK_TTL = 86400 * 7  # keep click data for 7 days
 
 async def _get_client() -> httpx.AsyncClient:
     """Get or create the shared httpx client (connection pooling)."""
-    global _httpx_client
+    global _httpx_client, _client_created_at
     async with _client_lock:
         if _httpx_client is None:
             limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
@@ -47,13 +47,29 @@ async def _get_client() -> httpx.AsyncClient:
                 verify=config.SSL_VERIFY,
                 limits=limits,
             )
+            _client_created_at = datetime.now().timestamp()
         return _httpx_client
 
 
+_client_created_at = 0.0
+
 async def _cleanup_click_tracking():
-    """Periodically trim click tracking to prevent unbounded growth."""
-    global _click_last_cleanup
+    """Periodically trim click tracking + recycle httpx client to prevent connection leaks."""
+    global _click_last_cleanup, _httpx_client, _client_created_at
     now = datetime.now().timestamp()
+
+    # Recycle httpx client every 30min to prevent connection pool leaks
+    if _httpx_client is not None and now - _client_created_at > 1800:
+        async with _client_lock:
+            if _httpx_client is not None:
+                try:
+                    await _httpx_client.aclose()
+                except Exception:
+                    pass
+                _httpx_client = None
+                _client_created_at = now
+                logger.debug("Recycled httpx client")
+
     if now - _click_last_cleanup < 3600:  # once per hour max
         return
     _click_last_cleanup = now
@@ -265,7 +281,7 @@ def _extract_date(html_text: str) -> str:
     return ""
 
 
-async def search_galleries(keyword: str, max_results: int = None, max_pages: int = 3) -> list[dict]:
+async def search_galleries(keyword: str, max_results: int = None, max_pages: int = 5) -> list[dict]:
     """Search galleries by keyword. Returns up to max_results entries."""
     if max_results is None:
         max_results = config.MAX_SEARCH_RESULTS
@@ -288,7 +304,7 @@ async def search_galleries(keyword: str, max_results: int = None, max_pages: int
 
     # Collect pagination links from the first page
     search_pages = [search_url]
-    for a in soup.select(".page-links a.page-numbers, .pagination a.page-numbers"):
+    for a in soup.select(".wp-block-query-pagination-numbers a.page-numbers, .page-links a.page-numbers, .pagination a.page-numbers"):
         href = a.get("href")
         if href:
             full = href if href.startswith("http") else config.BASE_URL.rstrip("/") + href
@@ -496,26 +512,10 @@ async def get_random_gallery():
     except Exception:
         pass
 
-    # Live fallback: search all 3 platforms with hot keywords
+    # Live fallback: search 4KHD with hot keywords
     hot_kws = await get_hot_keywords(top_n=5)
     kw = _random.choice(hot_kws) if hot_kws else "cosplay"
     candidates = []
-
-    # EH
-    if config.EH_MEMBER_ID:
-        try:
-            from scraper_eh import search_ehentai
-            eh = await search_ehentai(kw, max_results=10, max_pages=1)
-            candidates.extend(eh)
-        except Exception:
-            pass
-
-    # XC
-    try:
-        xc = await search_xchina(kw, max_results=15, max_pages=1)
-        candidates.extend(xc)
-    except Exception:
-        pass
 
     # 4KHD
     try:
@@ -553,7 +553,7 @@ async def _xc_fetch(url: str, retries: int = 2) -> str | None:
                 curl_req.get,
                 url,
                 headers=XC_HEADERS,
-                impersonate="chrome124",
+                impersonate="chrome131",
                 timeout=15,
             )
             if r.status_code == 200:
@@ -591,7 +591,7 @@ async def _xc_fetch_bytes(url: str, referer: str = "") -> Optional[tuple[BytesIO
                 curl_req.get,
                 url,
                 headers=headers,
-                impersonate="chrome124",
+                impersonate="chrome131",
                 timeout=20,
             )
             if r.status_code == 200 and len(r.content) > 500:
@@ -629,7 +629,7 @@ def _extract_xc_date(text: str) -> str:
     return ""
 
 
-async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 3) -> list[dict]:
+async def search_xchina(keyword: str, max_results: int = None, max_pages: int = 5) -> list[dict]:
     """Search xchina.co photo galleries."""
     if max_results is None:
         max_results = config.MAX_SEARCH_RESULTS
@@ -804,18 +804,21 @@ async def get_xchina_gallery(url: str, max_images: int = None) -> dict:
         img_urls = re.findall(r"https://img\.xchina\.io/photos/[^/]+/\d+\.webp", text)
         if img_urls:
             img_urls = [u.replace(".webp", "_600x0.webp") if "_600x0" not in u else u for u in img_urls]
+    # Convert _600x0.webp thumbnails -> .jpg originals + keep originals for cover
     images = []
     seen = set()
     for u in img_urls:
-        if u not in seen:
-            seen.add(u)
-            images.append(u)
+        # Use .jpg original (no _600x0 suffix)
+        full = re.sub(r'_\d+x\d+\.webp$', '.jpg', u)
+        if full not in seen:
+            seen.add(full)
+            images.append(full)
 
     # If no images found from HTML, generate from pattern
     if not images and gallery_id:
         # Try without leading zeros first (common format)
         for i in range(1, min(max_images + 1, 21)):
-            images.append(f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp")
+            images.append(f"https://img.xchina.io/photos/{gallery_id}/{i:05d}.jpg")
 
     result["images"] = images[:max_images]
 

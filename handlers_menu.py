@@ -1,5 +1,6 @@
-"""handlers_menu.py — Menu handlers and inline query handler."""
+﻿"""handlers_menu.py — Menu handlers and inline query handler."""
 from bot_utils import (
+    user_search_prompt_msg,
     now_ts, store_url, get_url, clean_title, parse_count_from_title,
     is_vip, user_waiting_search, user_waiting_card, send_or_edit, safe_search_wrapper, PURCHASE_URL,
     START_TEXT, START_KEYBOARD, VIP_TEXT,
@@ -7,7 +8,7 @@ from bot_utils import (
 )
 from display import _show_results_page, _send_xchina_detail, _send_eh_detail, _send_gallery_detail
 from config import config
-from scraper import search_galleries, search_xchina, get_random_gallery
+from scraper import search_galleries, get_random_gallery
 from scraper_eh import search_ehentai
 import asyncio, html, logging, traceback
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -20,6 +21,7 @@ async def _handle_menu_search(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
     user_waiting_search.add(user_id)
+    user_search_prompt_msg[user_id] = query.message.message_id
     keyboard = await build_hot_keyword_keyboard([
         [InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")],
     ], user_id=user_id)
@@ -37,7 +39,8 @@ async def _route_random_gallery(update, gallery):
     elif source == "xchina" or "xchina.co" in url or "/photo/id-" in url:
         await _send_xchina_detail(update, url, author=gallery.get("author", ""), publish_date=pd, from_random=True)
     else:
-        await _send_gallery_detail(update, url, from_random=True)
+        gallery_data = gallery if gallery.get("images") else None
+        await _send_gallery_detail(update, url, gallery_data=gallery_data, from_random=True)
 
 async def _handle_random_next(update, context):
     query = update.callback_query
@@ -117,8 +120,7 @@ async def handle_inline(update, context):
     # Quick search: 4KHD + XC only (skip EH for inline — too slow)
     try:
         hd_task = asyncio.create_task(safe_search_wrapper("4KHD", search_galleries(keyword, max_results=5)))
-        xc_task = asyncio.create_task(safe_search_wrapper("XChina", search_xchina(keyword, max_results=5)))
-        done_set, _ = await asyncio.wait([hd_task, xc_task], timeout=4.0)
+        done_set, _ = await asyncio.wait([hd_task], timeout=4.0)
         all_found = []
         for t in done_set:
             try:

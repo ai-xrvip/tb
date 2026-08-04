@@ -5,7 +5,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 from config import config
-from scraper import search_xchina, get_hot_keywords
+from scraper import get_hot_keywords, get_gallery_images
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -18,18 +19,20 @@ PRE_CACHE_SIZE = 20
 FETCH_SLOTS = 15      # max slots from periodic fetches (12h)
 POPULAR_SLOTS = 5      # max slots from popular galleries (2h)
 
-_WEEK_SEC = 7 * 86400
+_WEEK_SEC = 5 * 86400
 
 
 def _is_recent(gallery: dict) -> bool:
-    """Check if gallery's publish_date is within the last week."""
+    """Check if gallery's publish_date is within 5 days.
+    Returns True for unknown dates (search results have no dates).
+    """
     pd = gallery.get("publish_date", "")
     if not pd:
-        return False
+        return True
     now = datetime.now(timezone.utc)
     try:
         import re
-        m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", pd)
+        m = re.match(r"(\d{4})\u5e74(\d{1,2})\u6708(\d{1,2})\u65e5", pd)
         if m:
             dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
         else:
@@ -37,11 +40,10 @@ def _is_recent(gallery: dict) -> bool:
             if m:
                 dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
             else:
-                return False
+                return True
         return (now - dt).total_seconds() < _WEEK_SEC
     except Exception:
-        return False
-
+        return True
 
 async def _fetch_latest_from(source: str, count: int = 6) -> list:
     """Fetch the latest galleries from one source."""
@@ -69,6 +71,25 @@ async def _fetch_latest_from(source: str, count: int = 6) -> list:
     return recent
 
 
+
+
+async def _prefetch_gallery_detail(entry: dict):
+    """Background: pre-fetch gallery images and cover_bytes for faster display."""
+    url = entry.get("url", "")
+    if not url:
+        return
+    try:
+        gallery_data = await get_gallery_images(url)
+        if gallery_data and gallery_data.get("images"):
+            entry["images"] = gallery_data["images"]
+        if gallery_data and gallery_data.get("cover_bytes"):
+            entry["cover_bytes"] = gallery_data["cover_bytes"]
+        if gallery_data and gallery_data.get("publish_date"):
+            entry["publish_date"] = gallery_data["publish_date"]
+    except Exception as e:
+        logger.debug(f"Pre-cache prefetch failed for {url[:60]}: {e}")
+
+
 async def _refill_from_sources():
     """Refill cache from all 3 platforms (periodic)."""
     async with _pre_cache_lock:
@@ -76,7 +97,7 @@ async def _refill_from_sources():
     if current_count >= FETCH_SLOTS:
         return
 
-    sources = ["ehentai", "xchina", "4khd"]
+    sources = ["4khd"]
     random.shuffle(sources)
 
     for source in sources:
@@ -96,6 +117,7 @@ async def _refill_from_sources():
                     if len(_pre_cache) >= FETCH_SLOTS:
                         break
                     _pre_cache.append(g)
+                    asyncio.create_task(_prefetch_gallery_detail(g))
                     logger.info(f"Pre-cache: +{source} {g.get('title', '?')[:30]} ({len(_pre_cache)}/{PRE_CACHE_SIZE})")
 
 
@@ -185,7 +207,7 @@ async def track_pre_skipped(user_id):
 
 async def _fetch_replacement():
     """Immediately fetch one gallery from a random source to fill the gap."""
-    source = random.choice(["ehentai", "xchina", "4khd"])
+    source = "4khd"
     galleries = await _fetch_latest_from(source, count=3)
     if galleries:
         async with _pre_cache_lock:
@@ -194,11 +216,25 @@ async def _fetch_replacement():
                 if g.get("url", "") in cached_urls:
                     continue
                 _pre_cache.append(g)
+                asyncio.create_task(_prefetch_gallery_detail(g))
                 logger.info(f"Pre-cache: +replace {source}")
                 return
 
 
+async def _keep_alive():
+    """Self-ping health endpoint every 5 min to prevent Railway Hobby sleep."""
+    port = int(__import__('os').environ.get("PORT", 8000))
+    health_url = f"http://127.0.0.1:{port}/"
+    while True:
+        await asyncio.sleep(300)
+        try:
+            async with httpx.AsyncClient(timeout=5) as cl:
+                await cl.get(health_url)
+        except Exception:
+            pass
+
 async def start_pre_cache():
+    asyncio.create_task(_keep_alive())  # anti-sleep self-ping
     global _pre_cache_task
     if _pre_cache_task is not None:
         return
