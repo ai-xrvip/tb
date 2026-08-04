@@ -340,17 +340,27 @@ async def db_save_card(code: str, card_type: str, days: Optional[int], created_b
 
 async def db_activate_card(code: str, user_id: int) -> Optional[dict]:
     """Activate a card. Returns the activated card row (code, card_type, days) or None.
-    Atomic: the UPDATE WHERE used=0 ensures no race condition."""
+    Atomic: the UPDATE WHERE used=0 ensures no race condition.
+    Case-insensitive + whitespace-tolerant: users often paste codes in lowercase
+    or with stray spaces/line breaks, while codes are stored uppercase."""
+    norm = "".join(code.split()).upper()
+    if not norm:
+        return None
     def _do():
         c = _conn()
         cur = c.execute(
-            "UPDATE cards SET used=1, used_by=?, used_at=strftime('%s') WHERE code=? AND used=0",
-            (user_id, code),
+            "UPDATE cards SET used=1, used_by=?, used_at=strftime('%s') WHERE upper(code)=? AND used=0",
+            (user_id, norm),
         )
         if cur.rowcount == 0:
+            # No row updated: invalid/already-used card. Roll back so the
+            # implicit write transaction is released immediately, otherwise
+            # the thread-local connection keeps a lock that blocks later
+            # activations (sqlite3.OperationalError: database is locked).
+            c.rollback()
             return None
         c.commit()
-        return c.execute("SELECT code, card_type, days FROM cards WHERE code = ?", (code,)).fetchone()
+        return c.execute("SELECT code, card_type, days FROM cards WHERE upper(code)=?", (norm,)).fetchone()
     return await _run(_do)
 
 
