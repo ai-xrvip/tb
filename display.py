@@ -71,9 +71,35 @@ async def _show_results_page(msg_or_query, user_id, is_update=False, progressive
                     covers.append(InputMediaPhoto(media=img_data))
             if covers:
                 chat_id = msg_or_query.chat_id if hasattr(msg_or_query, "chat_id") else msg_or_query.message.chat_id
-                await msg_or_query.get_bot().send_media_group(chat_id=chat_id, media=covers)
+                sent = await msg_or_query.get_bot().send_media_group(chat_id=chat_id, media=covers)
+                state["album_ids"] = [m.message_id for m in sent]
         except Exception:
             logger.debug("Cover album failed: " + traceback.format_exc())
+    else:
+        # Keep the cover album in sync with the current page: edit the album
+        # in place (no new messages) so thumbnails match the updated list.
+        album_ids = state.get("album_ids")
+        if album_ids:
+            try:
+                sem = get_download_sem()
+                async def _dl_cover2(r):
+                    cover_url = r.get("cover")
+                    if not cover_url:
+                        return None
+                    async with sem:
+                        return await download_image(cover_url, referer=r.get("url", ""))
+                cover_tasks = [_dl_cover2(r) for r in page_results[:len(album_ids)]]
+                cover_results = await asyncio.gather(*cover_tasks)
+                chat_id = msg_or_query.chat_id if hasattr(msg_or_query, "chat_id") else msg_or_query.message.chat_id
+                bot = msg_or_query.get_bot()
+                for mid, img in zip(album_ids, cover_results):
+                    if not img:
+                        continue
+                    img_data, _ = img
+                    img_data.seek(0)
+                    await bot.edit_message_media(chat_id=chat_id, message_id=mid, media=InputMediaPhoto(media=img_data))
+            except Exception:
+                logger.debug("Cover album update failed: " + traceback.format_exc())
     if not is_vip_user and state.get("quota_left") is not None:
         text += f"\n🆓 今日剩余免费搜索 <b>{state['quota_left']}</b> 次 · 开通VIP无限搜\n"
     nav_buttons = []
