@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # ========== Display ==========
 
-async def _show_results_page(msg_or_query, user_id, is_update=False):
+async def _show_results_page(msg_or_query, user_id, is_update=False, progressive=False):
     state = user_search_state.get(user_id)
     if not state: return
     results = state["results"]
@@ -91,7 +91,8 @@ async def _show_results_page(msg_or_query, user_id, is_update=False):
     ])
     # Progressive indicator for updates
     if is_update:
-        text += "\n📡 <i>正在获取更多来源...</i>"
+        if progressive:
+            text += "\n📡 <i>正在获取更多来源...</i>"
         tracked_msg_id = state.get("results_msg_id")
         if tracked_msg_id:
             try:

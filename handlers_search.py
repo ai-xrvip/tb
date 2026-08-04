@@ -129,7 +129,7 @@ async def _run_search_and_display(msg, keyword, user_id, loading, query=None):
         else:
             # Update existing display — edit tracked results message
             user_search_state[user_id]["results_msg_id"] = results_msg_id
-            await _show_results_page(query if query else msg, user_id, is_update=True)
+            await _show_results_page(query if query else msg, user_id, is_update=True, progressive=True)
 
     # If nothing at all
     if not all_results:

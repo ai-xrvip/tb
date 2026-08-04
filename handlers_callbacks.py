@@ -353,7 +353,7 @@ async def _route_page(update, context):
         await query.edit_message_text("⏳ 会话已过期，请重新搜索。")
         return
     state["page"] = page
-    await _show_results_page(query, user_id)
+    await _show_results_page(query, user_id, is_update=True)
 
 @_prefix("d_")
 async def _route_detail_4khd(update, context):
