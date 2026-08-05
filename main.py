@@ -240,17 +240,22 @@ async def _startup(application):
     asyncio.create_task(_subscription_push_loop(application))
     asyncio.create_task(_db_backup_loop())
 
-    # Set bot commands
-    from telegram import BotCommand
-    await application.bot.set_my_commands([
-        BotCommand("start", "🏠 主菜单"),
-        BotCommand("search", "🔍 搜索图集"),
-        BotCommand("random", "🎲 随机推荐"),
-        BotCommand("my", "👤 我的VIP"),
-        BotCommand("subscribe", "🔔 订阅关键词"),
-        BotCommand("unsubscribe", "🔕 取消订阅"),
-        BotCommand("help", "📖 使用帮助"),
-    ])
+    # Set bot commands (non-fatal: transient Telegram hiccups must not restart the bot)
+    try:
+        # Set bot commands
+        from telegram import BotCommand
+        await application.bot.set_my_commands([
+            BotCommand("start", "🏠 主菜单"),
+            BotCommand("search", "🔍 搜索图集"),
+            BotCommand("random", "🎲 随机推荐"),
+            BotCommand("my", "👤 我的VIP"),
+            BotCommand("subscribe", "🔔 订阅关键词"),
+            BotCommand("unsubscribe", "🔕 取消订阅"),
+            BotCommand("help", "📖 使用帮助"),
+        ])
+
+    except Exception as e:
+        logger.warning("set_my_commands failed (non-fatal): %s", e)
     logger.info("Bot started — all services running")
 
 async def shutdown(app, signal_str=None):
