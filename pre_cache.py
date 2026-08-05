@@ -2,10 +2,10 @@
 import asyncio
 import random
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from config import config
-from scraper import get_hot_keywords, get_gallery_images
+from scraper import get_hot_keywords, get_gallery_images, _fix_image_url, HEADERS
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -16,8 +16,9 @@ _pre_cache_task = None
 _pre_skip_count = {}
 _pre_user_last = {}
 PRE_CACHE_SIZE = 20
-FETCH_SLOTS = 15      # max slots from periodic fetches (12h)
-POPULAR_SLOTS = 5      # max slots from popular galleries (2h)
+DAILY_FRESH = 10     # newest galleries refilled every day at 12:00
+DAILY_POPULAR = 10   # most-clicked galleries refilled every day at 12:00
+_CN_TZ = timezone(timedelta(hours=8))  # Asia/Shanghai
 
 _WEEK_SEC = 5 * 86400
 
@@ -45,30 +46,75 @@ def _is_recent(gallery: dict) -> bool:
     except Exception:
         return True
 
-async def _fetch_latest_from(source: str, count: int = 6) -> list:
-    """Fetch the latest galleries from one source."""
+async def _fetch_latest_4khd(count: int = DAILY_FRESH) -> list:
+    """Fetch the newest galleries from the 4KHD homepage."""
     results = []
     try:
-        kws = await get_hot_keywords(top_n=5)
-        kw = random.choice(kws) if kws else "cosplay"
-
-        if source == "ehentai" and config.EH_MEMBER_ID:
-            from scraper_eh import search_ehentai
-            eh = await search_ehentai(kw, max_results=count, max_pages=1)
-            results.extend(eh)
-        elif source == "xchina":
-            xc = await search_xchina(kw, max_results=count, max_pages=1)
-            results.extend(xc)
-        elif source == "4khd":
-            from scraper import search_galleries
-            hd = await search_galleries(kw, max_results=count, max_pages=1)
-            results.extend(hd)
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=HEADERS) as client:
+            r = await client.get(config.BASE_URL)
+            r.raise_for_status()
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(r.text, "html.parser")
+            for article in soup.select("article, .post, .entry"):
+                title_el = article.find(["h1", "h2", "h3", "h4"])
+                link_el = article.find("a", href=True)
+                img_el = article.find("img")
+                if not (title_el and link_el):
+                    continue
+                title = title_el.text.strip()
+                link = link_el["href"]
+                if not link.startswith("http"):
+                    link = config.BASE_URL.rstrip("/") + link
+                if "/content/" not in link:
+                    continue
+                cover = None
+                if img_el:
+                    cover = _fix_image_url(
+                        img_el.get("src") or img_el.get("data-src") or img_el.get("data-original") or ""
+                    )
+                results.append({
+                    "title": title, "url": link, "cover": cover,
+                    "description": "", "source": "4khd", "publish_date": "",
+                })
+                if len(results) >= count:
+                    break
     except Exception as e:
-        logger.warning(f"Pre-cache fetch {source}: {e}")
+        logger.warning(f"Pre-cache latest fetch failed: {e}")
+    logger.info(f"Pre-cache latest: {len(results)} galleries")
+    return results
 
-    recent = [g for g in results if _is_recent(g)]
-    logger.info(f"Pre-cache {source}: {len(recent)}/{len(results)} recent")
-    return recent
+
+def _collect_popular(count: int = DAILY_POPULAR) -> list:
+    """Most-clicked galleries (by gallery_clicks), capped at `count`."""
+    from scraper import gallery_clicks as gc, gallery_titles as gt
+    if not gc:
+        return []
+    sorted_clicks = sorted(gc.items(), key=lambda x: x[1], reverse=True)
+    out = []
+    for url, _clicks in sorted_clicks:
+        title = gt.get(url, "")
+        if not title:
+            continue
+        out.append({
+            "title": title, "url": url, "cover": None,
+            "description": "", "source": "popular", "publish_date": "",
+        })
+        if len(out) >= count:
+            break
+    return out
+
+
+async def _rebuild_daily_pool():
+    """Rebuild the pool: 10 newest + 10 most-clicked galleries."""
+    fresh = await _fetch_latest_4khd(DAILY_FRESH)
+    popular = _collect_popular(DAILY_POPULAR)
+    async with _pre_cache_lock:
+        _pre_cache.clear()
+        for g in fresh + popular:
+            _pre_cache.append(g)
+            asyncio.create_task(_prefetch_gallery_detail(g))
+    logger.info(f"Pre-cache: rebuilt daily pool ({len(fresh)} fresh + {len(popular)} popular = {len(_pre_cache)})")
+
 
 
 
@@ -90,80 +136,23 @@ async def _prefetch_gallery_detail(entry: dict):
         logger.debug(f"Pre-cache prefetch failed for {url[:60]}: {e}")
 
 
-async def _refill_from_sources():
-    """Refill cache from all 3 platforms (periodic)."""
-    async with _pre_cache_lock:
-        current_count = len(_pre_cache)
-    if current_count >= FETCH_SLOTS:
-        return
-
-    sources = ["4khd"]
-    random.shuffle(sources)
-
-    for source in sources:
-        async with _pre_cache_lock:
-            remaining = FETCH_SLOTS - len(_pre_cache)
-        if remaining <= 0:
-            break
-
-        per_source = max(2, remaining // len(sources))
-        galleries = await _fetch_latest_from(source, count=per_source)
-        if galleries:
-            async with _pre_cache_lock:
-                cached_urls = {g.get("url", "") for g in _pre_cache}
-                for g in galleries:
-                    if g.get("url", "") in cached_urls:
-                        continue
-                    if len(_pre_cache) >= FETCH_SLOTS:
-                        break
-                    _pre_cache.append(g)
-                    asyncio.create_task(_prefetch_gallery_detail(g))
-                    logger.info(f"Pre-cache: +{source} {g.get('title', '?')[:30]} ({len(_pre_cache)}/{PRE_CACHE_SIZE})")
-
-
-async def _add_popular():
-    """Every 2h: add popular galleries (>=2 clicks), capped at POPULAR_SLOTS."""
-    from scraper import gallery_clicks as gc, gallery_titles as gt
-    if not gc:
-        return
-    sorted_clicks = sorted(gc.items(), key=lambda x: x[1], reverse=True)
-    top_urls = [(u, c) for u, c in sorted_clicks if c >= 2]
-    if not top_urls:
-        return
-
-    added = 0
-    async with _pre_cache_lock:
-        popular_in_cache = sum(1 for g in _pre_cache if g.get("source") == "popular")
-        remaining = POPULAR_SLOTS - popular_in_cache
-        if remaining <= 0:
-            return
-
-        cached_urls = {g.get("url", "") for g in _pre_cache}
-        for url, count in top_urls:
-            if url in cached_urls:
-                continue
-            title = gt.get(url, "")
-            if title:
-                _pre_cache.append({
-                    "title": title, "url": url, "cover": None,
-                    "source": "popular", "publish_date": "",
-                })
-                cached_urls.add(url)
-                added += 1
-                logger.info(f"Pre-cache: +popular {title[:30]}")
-                if added >= remaining:
-                    break
-
-
 async def _fill_pre_cache():
-    """Background loop: refill every 12h."""
-    await asyncio.sleep(300)
+    """Fill once at startup, then rebuild the pool at 12:00 (Asia/Shanghai) daily."""
+    await asyncio.sleep(60)
+    try:
+        await _rebuild_daily_pool()
+    except Exception as e:
+        logger.warning(f"Pre-cache initial fill error: {e}")
     while True:
+        now = datetime.now(_CN_TZ)
+        next_noon = now.replace(hour=12, minute=0, second=0, microsecond=0)
+        if next_noon <= now:
+            next_noon += timedelta(days=1)
+        await asyncio.sleep((next_noon - now).total_seconds())
         try:
-            await _refill_from_sources()
+            await _rebuild_daily_pool()
         except Exception as e:
-            logger.warning(f"Pre-cache refill error: {e}")
-        await asyncio.sleep(43200)
+            logger.warning(f"Pre-cache daily rebuild error: {e}")
 
 
 async def pop_pre_cached():
@@ -206,19 +195,16 @@ async def track_pre_skipped(user_id):
 
 
 async def _fetch_replacement():
-    """Immediately fetch one gallery from a random source to fill the gap."""
-    source = "4khd"
-    galleries = await _fetch_latest_from(source, count=3)
-    if galleries:
-        async with _pre_cache_lock:
-            cached_urls = {g.get("url", "") for g in _pre_cache}
-            for g in galleries:
-                if g.get("url", "") in cached_urls:
-                    continue
-                _pre_cache.append(g)
-                asyncio.create_task(_prefetch_gallery_detail(g))
-                logger.info(f"Pre-cache: +replace {source}")
-                return
+    """Immediately fetch one latest gallery to fill a skipped slot."""
+    try:
+        galleries = await _fetch_latest_4khd(1)
+        if galleries:
+            async with _pre_cache_lock:
+                _pre_cache.append(galleries[0])
+                asyncio.create_task(_prefetch_gallery_detail(galleries[0]))
+                logger.info("Pre-cache: +replacement")
+    except Exception as e:
+        logger.debug(f"Pre-cache replacement failed: {e}")
 
 
 async def _keep_alive():
@@ -239,18 +225,7 @@ async def start_pre_cache():
     if _pre_cache_task is not None:
         return
     _pre_cache_task = asyncio.create_task(_fill_pre_cache())
-
-    async def _popular_loop():
-        await asyncio.sleep(600)
-        while True:
-            try:
-                await _add_popular()
-            except Exception as e:
-                logger.warning(f"Popular loop error: {e}")
-            await asyncio.sleep(7200)
-
-    asyncio.create_task(_popular_loop())
-    logger.info("Pre-cache: 20 slots (15 fetch + 5 popular, 12h/2h)")
+    logger.info("Pre-cache: daily 12:00 pool (10 fresh + 10 popular)")
 
 
 async def stop_pre_cache():

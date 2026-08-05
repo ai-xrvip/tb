@@ -18,6 +18,31 @@ logger = logging.getLogger(__name__)
 
 # ========== Display ==========
 
+async def _update_cover_album(bot, chat_id, album_ids, page_results):
+    """Background task: edit the cover album in place so thumbnails match the
+    current page. Runs detached so slow downloads / Telegram API calls never
+    block the user-facing callback."""
+    try:
+        sem = get_download_sem()
+        async def _dl_cover(r):
+            cover_url = r.get("cover")
+            if not cover_url:
+                return None
+            async with sem:
+                return await download_image(cover_url, referer=r.get("url", ""))
+        cover_results = await asyncio.gather(*[_dl_cover(r) for r in page_results[:len(album_ids)]])
+        for mid, img in zip(album_ids, cover_results):
+            if not img:
+                continue
+            img_data, _ = img
+            img_data.seek(0)
+            await bot.edit_message_media(chat_id=chat_id, message_id=mid, media=InputMediaPhoto(media=img_data))
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.debug("Cover album update failed: " + traceback.format_exc())
+
+
 async def _show_results_page(msg_or_query, user_id, is_update=False, progressive=False):
     state = user_search_state.get(user_id)
     if not state: return
@@ -71,9 +96,22 @@ async def _show_results_page(msg_or_query, user_id, is_update=False, progressive
                     covers.append(InputMediaPhoto(media=img_data))
             if covers:
                 chat_id = msg_or_query.chat_id if hasattr(msg_or_query, "chat_id") else msg_or_query.message.chat_id
-                await msg_or_query.get_bot().send_media_group(chat_id=chat_id, media=covers)
+                sent = await msg_or_query.get_bot().send_media_group(chat_id=chat_id, media=covers)
+                state["album_ids"] = [m.message_id for m in sent]
         except Exception:
             logger.debug("Cover album failed: " + traceback.format_exc())
+    else:
+        # Detached background sync: update album thumbnails to match the page.
+        album_ids = state.get("album_ids")
+        if album_ids:
+            chat_id = msg_or_query.chat_id if hasattr(msg_or_query, "chat_id") else msg_or_query.message.chat_id
+            bot = msg_or_query.get_bot()
+            old_task = state.get("album_task")
+            if old_task and not old_task.done():
+                old_task.cancel()
+            state["album_task"] = asyncio.create_task(
+                asyncio.wait_for(_update_cover_album(bot, chat_id, album_ids, page_results), timeout=60)
+            )
     if not is_vip_user and state.get("quota_left") is not None:
         text += f"\n🆓 今日剩余免费搜索 <b>{state['quota_left']}</b> 次 · 开通VIP无限搜\n"
     nav_buttons = []
