@@ -210,12 +210,14 @@ async def _route_admin_gencode(update, context):
         ("📅 永久(S)", "forever", 0),
     ]
     prefix_map = {"month": "Y", "quarter": "J", "year": "N", "forever": "S"}
+    tasks = []
     for label, tname, days_val in types:
         prefix = prefix_map[tname]
         for _ in range(10):
             code = prefix + "-" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
-            asyncio.create_task(db_save_card(code, tname, days_val if days_val > 0 else None, user_id))
+            tasks.append(db_save_card(code, tname, days_val if days_val > 0 else None, user_id))
             generated.append(code)
+    await asyncio.gather(*tasks)
     gen_lines = ["🔫 <b>已生成 40 张卡密</b>", ""]
     for label, tname, days_val in types:
         prefix = prefix_map[tname]
@@ -339,7 +341,7 @@ async def _route_admin_listusers(update, context):
 async def _route_hot(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
-    kw = query.data[4:]
+    kw = html.unescape(query.data[4:])
     user_waiting_search.discard(user_id)
     await _do_search_callback(query, kw)
 

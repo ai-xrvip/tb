@@ -15,6 +15,7 @@ from database import (
     db_add_user, db_bump_stat, db_save_vip, db_card_count_used, db_card_count_total,
     db_vip_count, db_vip_permanent_count, db_user_count,
     db_get_stats_last_days, db_get_user_history,
+    db_touch_user,
     db_delete_expired_vip,
     db_load_cards, db_activate_card, db_save_card,
 )
@@ -34,6 +35,8 @@ async def cmd_start(update, context):
         ALL_USERS.add(user_id)
         asyncio.create_task(db_add_user(user_id))
         asyncio.create_task(db_bump_stat(datetime.now().strftime("%Y-%m-%d"), "new_users"))
+    else:
+        asyncio.create_task(db_touch_user(user_id))
         # Optional free trial for brand-new users (FREE_TRIAL_DAYS > 0).
         # Note: permanent VIP is stored as None, so membership must be checked
         # via `user_id in VIP_USERS` (a missing key means "not a VIP at all").
@@ -240,15 +243,16 @@ async def cmd_broadcast(update, context):
             "将向所有普通用户（非VIP）发送一次更新通知。\n"
             "示例: /broadcast 🎉 新版本上线！免费用户每日可搜索10次，开通VIP无限搜～")
         return
-    # HTML 模式下裸 URL 不会自动变成可点击链接，统一转成带文案的购买链接
-    if PURCHASE_URL in text and f'<a href="{PURCHASE_URL}">' not in text:
-        text = text.replace(PURCHASE_URL, f'<a href="{PURCHASE_URL}">点击开通会员</a>')
+    # HTML 模式下裸 URL 不会自动变成可点击链接，统一转成带文案的购买链接；其余内容转义避免 HTML 注入
+    safe_text = html.escape(text)
+    if PURCHASE_URL in safe_text and f'<a href="{PURCHASE_URL}">' not in safe_text:
+        safe_text = safe_text.replace(PURCHASE_URL, f'<a href="{PURCHASE_URL}">点击开通会员</a>')
     targets = [uid for uid in ALL_USERS if uid not in VIP_USERS]
     ok = 0
     failed = 0
     for uid in targets:
         try:
-            await context.bot.send_message(chat_id=uid, text=text, parse_mode="HTML")
+            await context.bot.send_message(chat_id=uid, text=safe_text, parse_mode="HTML")
             ok += 1
         except Exception:
             try:

@@ -283,29 +283,26 @@ _CMD_HANDLERS = [
 ]
 
 async def _load_data():
-    """Load persistent data from SQLite into module globals."""
+    """Load persistent data from SQLite into the shared context (then sync globals)."""
     logger.info("Loading data from database...")
+    from bot_context import get_ctx, set_ctx
+    ctx = get_ctx()
 
-    # Load VIPs
-    VIP_USERS.clear()
-    VIP_USERS.update(await db_load_vip())
-
-    # Load all users
-    ALL_USERS.clear()
-    ALL_USERS.update(await db_load_users())
-
-    # Load invites
-    INVITES.clear()
-    INVITES.update(await db_load_invites())
+    # Load VIPs / users / invites into the context
+    ctx.vip_users = dict(await db_load_vip())
+    ctx.all_users = set(await db_load_users())
+    ctx.invites = dict(await db_load_invites())
+    ctx.admin_ids = set(config.ADMIN_IDS)
 
     # Ensure at least one admin VIP exists
-    if not VIP_USERS and config.ADMIN_IDS:
+    if not ctx.vip_users and config.ADMIN_IDS:
         from database import db_save_vip
         for aid in config.ADMIN_IDS:
-            VIP_USERS[aid] = None
+            ctx.vip_users[aid] = None
             await db_save_vip(aid, None)
 
-    # Sync to context (backward compat)
+    set_ctx(ctx)
+    # Sync context -> module globals so existing imports keep working
     sync_from_context()
 
     logger.info(f"Loaded {len(VIP_USERS)} VIP users, {len(ALL_USERS)} total users, {len(INVITES)} invites")

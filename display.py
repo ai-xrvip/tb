@@ -8,15 +8,59 @@ from scraper import get_gallery_images, download_image, track_click, get_xchina_
 from scraper_eh import get_eh_gallery, get_eh_magnet
 from pre_cache import track_pre_clicked
 from config import config
-import asyncio, html, logging, re, traceback, httpx
+import asyncio, html, logging, re, time, traceback, httpx
 from io import BytesIO
 from datetime import datetime
+from typing import Optional
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto,
 )
 logger = logging.getLogger(__name__)
 
 # ========== Display ==========
+
+# Per-URL gallery image cache (avoids re-fetching the whole gallery on every page turn)
+_GALLERY_CACHE_TTL = 1800  # 30 min
+_gallery_images_cache: dict[str, tuple[float, list]] = {}
+
+
+async def _load_all_images(url: str, user_id: int) -> Optional[list]:
+    """Load a gallery's full image list, cached per URL for 30 minutes.
+    Returns None if the gallery can't be loaded."""
+    now = time.time()
+    entry = _gallery_images_cache.get(url)
+    if entry and now - entry[0] < _GALLERY_CACHE_TTL:
+        return entry[1]
+    is_ehentai = "e-hentai.org" in url
+    is_xchina = "/photo/id-" in url
+    max_imgs = 200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES
+    all_images: list = []
+    try:
+        if is_ehentai:
+            eh_data = await get_eh_gallery(url, max_images=max_imgs)
+            all_images = eh_data["images"]
+        elif is_xchina:
+            gid = re.search(r"/id-([a-f0-9]+)", url)
+            if not gid:
+                return None
+            gallery_id = gid.group(1)
+            detail = await get_xchina_gallery(url)
+            actual_count = detail.get("count", 0)
+            actual_images = detail.get("images", [])
+            if actual_images:
+                all_images = actual_images[:max_imgs]
+            else:
+                cap = min(max_imgs, actual_count if actual_count > 0 else max_imgs)
+                all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, cap + 1)]
+        else:
+            gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
+            all_images = gallery_data["images"]
+    except Exception:
+        logger.error("Load gallery images failed: " + traceback.format_exc())
+        return None
+    _gallery_images_cache[url] = (time.time(), all_images)
+    return all_images
+
 
 async def _update_cover_album(bot, chat_id, album_ids, page_results):
     """Background task: edit the cover album in place so thumbnails match the
@@ -307,50 +351,10 @@ async def _send_gallery_detail(update, url, gallery_data=None, from_random=False
 
 async def _send_gallery_full(update, url):
     user_id = update.effective_user.id
-    is_ehentai = "e-hentai.org" in url
-    is_xchina = "/photo/id-" in url
-    if is_ehentai:
-        try:
-            max_imgs = 200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES
-            eh_data = await get_eh_gallery(url, max_images=max_imgs)
-        except Exception:
-            logger.error("EH full gallery error: " + traceback.format_exc())
-            await update.effective_message.reply_text("❌ 加载EH图集失败")
-            return
-        all_images = eh_data["images"]
-    elif is_xchina:
-        gid = re.search(r"/id-([a-f0-9]+)", url)
-        if gid:
-            gallery_id = gid.group(1)
-            # Fetch the gallery first to know the actual image count
-            try:
-                detail = await get_xchina_gallery(url)
-                actual_count = detail.get("count", 0)
-                actual_images = detail.get("images", [])
-            except Exception:
-                logger.warning("XC full gallery: failed to get detail, using default gen")
-                actual_count = 0
-                actual_images = []
-            max_imgs = min(
-                200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES,
-                actual_count if actual_count > 0 else (200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES),
-            )
-            if actual_images:
-                all_images = actual_images[:max_imgs]
-            else:
-                all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
-        else:
-            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
-            return
-    else:
-        try:
-            max_imgs = 200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES
-            gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
-        except Exception:
-            logger.error("Full gallery error: " + traceback.format_exc())
-            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
-            return
-        all_images = gallery_data["images"]
+    all_images = await _load_all_images(url, user_id)
+    if all_images is None:
+        await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+        return
     total_pages = (len(all_images) + 9) // 10
     preview = all_images[:10]
     media = []
@@ -389,48 +393,10 @@ async def _send_gallery_full(update, url):
 async def _send_gallery_page(update, url, page=0):
     user_id = update.effective_user.id
     if not is_vip(user_id): return
-    is_ehentai = "e-hentai.org" in url
-    is_xchina = "/photo/id-" in url
-    if is_ehentai:
-        try:
-            max_imgs = 200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES
-            eh_data = await get_eh_gallery(url, max_images=max_imgs)
-        except Exception:
-            await update.effective_message.reply_text("❌ 加载EH图集失败")
-            return
-        all_images = eh_data["images"]
-    elif is_xchina:
-        gid = re.search(r"/id-([a-f0-9]+)", url)
-        if gid:
-            gallery_id = gid.group(1)
-            # Fetch the gallery first to know the actual image count
-            try:
-                detail = await get_xchina_gallery(url)
-                actual_count = detail.get("count", 0)
-                actual_images = detail.get("images", [])
-            except Exception:
-                logger.warning("XC gallery page: failed to get detail, using default gen")
-                actual_count = 0
-                actual_images = []
-            max_imgs = min(
-                200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES,
-                actual_count if actual_count > 0 else (200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES),
-            )
-            if actual_images:
-                all_images = actual_images[:max_imgs]
-            else:
-                all_images = [f"https://img.xchina.io/photos/{gallery_id}/{i:05d}_600x0.webp" for i in range(1, max_imgs + 1)]
-        else:
-            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
-            return
-    else:
-        try:
-            max_imgs = 200 if is_vip(user_id) else config.FREE_PREVIEW_IMAGES
-            gallery_data = await get_gallery_images(url, max_pages=20, max_images=max_imgs)
-        except Exception:
-            await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
-            return
-        all_images = gallery_data["images"]
+    all_images = await _load_all_images(url, user_id)
+    if all_images is None:
+        await update.effective_message.reply_text("😔 加载失败，请稍后再试。")
+        return
     total_pages = (len(all_images) + 9) // 10
     start = page * 10
     end = start + 10

@@ -188,36 +188,50 @@ async def _get_proxy_client(proxy_url: str) -> httpx.AsyncClient:
 
 async def _fetch(url: str, retries: int = 2) -> Optional[str]:
     """Async HTTP GET, returns response text.
-    Uses proxy pool if available, falls back to direct connection if pool is empty."""
+    Uses proxy pool if available; if the proxy fails all retries, falls back
+    to a direct connection (which is the normal path when the pool is empty)."""
     proxy_url = get_random_proxy() if "4khd.com" in url else None
-    for attempt in range(retries):
+
+    async def _attempt(client) -> Optional[str]:
         try:
-            if proxy_url:
-                client = await _get_proxy_client(proxy_url)
-            else:
-                client = await _get_client()
             r = await client.get(url, follow_redirects=True)
-            if r.status_code == 200:
-                if proxy_url:
-                    from proxy_pool import report_proxy_result
-                    report_proxy_result(proxy_url, True)
-                return r.text
-            if r.status_code == 429:
-                wait = int(r.headers.get("Retry-After", "10"))
-                logger.warning(f"Rate limited on {url[:60]}, waiting {wait}s")
-                await asyncio.sleep(wait)
-            else:
-                logger.warning(f"HTTP {r.status_code} for {url[:60]} (attempt {attempt+1})")
-                await asyncio.sleep(1)
         except httpx.TimeoutException:
-            logger.warning(f"Timeout for {url[:60]} (attempt {attempt+1})")
-            await asyncio.sleep(1)
+            logger.warning(f"Timeout for {url[:60]}")
+            return None
         except Exception as e:
-            logger.warning(f"Request error for {url[:60]} (attempt {attempt+1}): {e}")
-            await asyncio.sleep(1)
+            logger.warning(f"Request error for {url[:60]}: {e}")
+            return None
+        if r.status_code == 200:
+            return r.text
+        if r.status_code == 429:
+            wait = int(r.headers.get("Retry-After", "10"))
+            logger.warning(f"Rate limited on {url[:60]}, waiting {wait}s")
+            await asyncio.sleep(wait)
+        else:
+            logger.warning(f"HTTP {r.status_code} for {url[:60]}")
+        return None
+
     if proxy_url:
+        for attempt in range(retries):
+            client = await _get_proxy_client(proxy_url)
+            text = await _attempt(client)
+            if text is not None:
+                from proxy_pool import report_proxy_result
+                report_proxy_result(proxy_url, True)
+                return text
+            await asyncio.sleep(1)
         from proxy_pool import report_proxy_result
         report_proxy_result(proxy_url, False)
+        # Proxy failed entirely - fall back to a direct connection
+        logger.warning(f"Proxy failed for {url[:60]}, falling back to direct")
+        return await _attempt(await _get_client())
+
+    client = await _get_client()
+    for attempt in range(retries):
+        text = await _attempt(client)
+        if text is not None:
+            return text
+        await asyncio.sleep(1)
     return None
 
 

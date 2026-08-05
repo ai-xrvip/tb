@@ -49,12 +49,14 @@ def test_is_recent():
     # Today should be recent
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     assert _is_recent({"publish_date": today}) is True
-    # Chinese format
-    assert _is_recent({"publish_date": "2026年07月08日"}) is True
-    # Empty string
-    assert _is_recent({"publish_date": ""}) is False
-    # No publish_date
-    assert _is_recent({}) is False
+    # Chinese format - use dynamic dates so the test doesn't rot
+    recent_cn = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y年%m月%d日")
+    assert _is_recent({"publish_date": recent_cn}) is True
+    old_cn = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y年%m月%d日")
+    assert _is_recent({"publish_date": old_cn}) is False
+    # Empty / missing dates are treated as recent (unknown dates stay in the pool)
+    assert _is_recent({"publish_date": ""}) is True
+    assert _is_recent({}) is True
     print("  OK: _is_recent date validation")
 
 

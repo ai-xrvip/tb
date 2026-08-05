@@ -146,6 +146,8 @@ def _conn() -> sqlite3.Connection:
     if conn is None:
         conn = sqlite3.connect(_db_path, check_same_thread=False)
         conn.row_factory = _dict_factory
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
         _local.conn = conn
     return conn
 
@@ -413,18 +415,18 @@ async def db_user_invites(user_id: int) -> list[str]:
 async def db_add_favorite(user_id: int, title: str, url: str, source: str) -> bool:
     """Returns True if added, False if already exists."""
     try:
-        await _exec(
+        rc = await _exec_rowcount(
             "INSERT OR IGNORE INTO favorites (user_id, title, url, source) VALUES (?, ?, ?, ?)",
             (user_id, title, url, source),
         )
-        return True
+        return rc > 0
     except Exception:
         return False
 
 
 async def db_get_favorites(user_id: int) -> list[dict]:
     return await _fetch_all(
-        "SELECT title, url, source, added_at FROM favorites WHERE user_id=? ORDER BY added_at DESC LIMIT 20",
+        "SELECT title, url, source, added_at FROM favorites WHERE user_id=? ORDER BY added_at DESC, rowid DESC LIMIT 20",
         (user_id,),
     )
 
@@ -481,24 +483,20 @@ async def db_add_search_history(user_id: int, keyword: str):
 
 
 async def db_bump_search_quota(user_id: int, date_str: str) -> int:
-    """Increment today's free-search counter for a user; returns the new used count."""
+    """Increment today's free-search counter for a user; returns the new used count.
+    Atomic upsert so concurrent searches can't double-read the same counter."""
     def _do():
         c = _conn()
-        row = c.execute("SELECT date, used FROM search_quota WHERE user_id = ?", (user_id,)).fetchone()
-        if row is None:
-            used = 1
-            c.execute(
-                "INSERT INTO search_quota (user_id, date, used) VALUES (?, ?, ?)",
-                (user_id, date_str, used),
-            )
-        elif row["date"] == date_str:
-            used = row["used"] + 1
-            c.execute("UPDATE search_quota SET used = ? WHERE user_id = ?", (used, user_id))
-        else:
-            used = 1
-            c.execute("UPDATE search_quota SET date = ?, used = 1 WHERE user_id = ?", (date_str, user_id))
+        c.execute(
+            "INSERT INTO search_quota (user_id, date, used) VALUES (?, ?, 1) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "date = excluded.date, "
+            "used = CASE WHEN search_quota.date = excluded.date THEN search_quota.used + 1 ELSE 1 END",
+            (user_id, date_str),
+        )
         c.commit()
-        return used
+        row = c.execute("SELECT used FROM search_quota WHERE user_id = ?", (user_id,)).fetchone()
+        return row["used"]
     return await _run(_do)
 
 async def db_get_user_history(user_id: int, limit: int = 6) -> list[str]:
@@ -649,21 +647,10 @@ async def db_migrate_from_json(data_dir: str) -> dict:
         else:
             logger.info("Skipping cards migration - DB already has data")
 
-    # Fallback: if cards.json doesn't exist (excluded by .dockerignore), seed from seed_cards.py
+    # NOTE: the old seed_cards.py fallback was removed - hardcoded card codes in the
+    # public GitHub repo leaked the whole inventory. Import cards via /addcards instead.
     if stats["cards"] == 0 and await db_card_count_total() == 0:
-        try:
-            from seed_cards import SEED_CARDS
-            if SEED_CARDS:
-                clean = {k: v for k, v in SEED_CARDS.items() if not any(
-                    label in k for label in ("月卡", "季卡", "年卡", "永久", "体验")
-                )}
-                if clean:
-                    await db_seed_from_dict(clean)
-                    stats["cards"] = len(clean)
-                    logger.info("Seeded %d cards from seed_cards.py (fallback)", stats["cards"])
-        except Exception as e:
-            logger.warning("Cards seed fallback failed: %s", e)
-            stats.setdefault("skipped", []).append("seed_cards.py")
+        logger.warning("No cards in DB and no cards.json to migrate - use /addcards to import")
 
     # Favorites
     fav_path = _os.path.join(data_dir, "favorites.json")

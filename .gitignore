@@ -10,11 +10,13 @@ find_eh.js
 # Secrets - never commit
 CREDENTIALS.md
 
-# Local SQLite DB / backups / logs
+# Local SQLite DB / backups / logs / legacy json
+# (data/*.json may contain card codes / user IDs - never commit)
 data/*.db
 data/*.db-wal
 data/*.db-shm
 data/backups/
+data/*.json
 
 # Node deps (not used by the Python app)
 node_modules/
@@ -22,4 +24,6 @@ node_modules/
 # Scratch / dev files
 10
 _fix*.js
+_fix*.py
 _test_4khd.py
+seed_cards.py

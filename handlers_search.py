@@ -2,7 +2,7 @@
 from bot_utils import (
     now_ts, store_url, get_url, clean_title, parse_count_from_title,
     is_vip, check_rate_limit, safe_search_wrapper,
-    user_search_state, dedup_results, quality_score,
+    user_search_state, dedup_results, quality_score, _safe_callback,
     EH_ENABLED, RESULTS_PER_PAGE, VIP_CTA_TEXT, vip_cta_keyboard,
 )
 from display import _show_results_page
@@ -139,7 +139,7 @@ async def _run_search_and_display(msg, keyword, user_id, loading, query=None):
             pass
         from scraper import get_hot_keywords
         hot = await get_hot_keywords(top_n=5)
-        suggest_btns = [[InlineKeyboardButton(kw, callback_data=f"hot_{html.escape(kw)[:15]}")] for kw in hot]
+        suggest_btns = [[InlineKeyboardButton(kw, callback_data=_safe_callback("hot_", kw))] for kw in hot]
         suggest_btns.append([InlineKeyboardButton("🏠 返回主菜单", callback_data="menu_home")])
         await msg.reply_text(
             f"😔 没有找到「{html.escape(keyword)}」相关图集\n\n🔥 试试热门搜索：",

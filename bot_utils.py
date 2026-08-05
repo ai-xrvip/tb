@@ -163,9 +163,15 @@ def vip_cta_keyboard():
 from bot_context import get_ctx as _get_ctx
 
 def sync_from_context() -> None:
-    """DEPRECATED: This function breaks the shared reference between modules.
-    Do NOT call it. _load_data() now operates directly on bot_utils globals."""
-    pass
+    """Copy the BotContext singleton into the module globals so existing
+    imports (`from bot_utils import VIP_USERS`) keep working."""
+    ctx = _get_ctx()
+    VIP_USERS.clear()
+    VIP_USERS.update(ctx.vip_users)
+    ALL_USERS.clear()
+    ALL_USERS.update(ctx.all_users)
+    INVITES.clear()
+    INVITES.update(ctx.invites)
 
 
 
@@ -397,11 +403,17 @@ def quality_score(r: dict) -> float:
 # ========== Hot keyword keyboard ==========
 
 def _safe_callback(prefix: str, value: str, max_bytes: int = 64) -> str:
-    """Build a callback-data string that fits Telegram's 64-byte limit."""
+    """Build a callback-data string that fits Telegram's 64-byte limit
+    without splitting multi-byte characters mid-sequence."""
     data = prefix + value
-    while data and len(data.encode("utf-8")) > max_bytes:
-        data = data[:-1]
-    return data
+    if len(data.encode("utf-8")) <= max_bytes:
+        return data
+    out = prefix
+    for ch in value:
+        if len((out + ch).encode("utf-8")) > max_bytes:
+            break
+        out += ch
+    return out
 
 
 async def build_hot_keyword_keyboard(extra_buttons=None, user_id: int | None = None):
@@ -410,13 +422,13 @@ async def build_hot_keyword_keyboard(extra_buttons=None, user_id: int | None = N
     if user_id is not None:
         history = await db_get_user_history(user_id, limit=6)
         if history:
-            hist_row = [InlineKeyboardButton(f"🕐 {kw}", callback_data=_safe_callback("hot_", html.escape(kw))) for kw in history[:3]]
+            hist_row = [InlineKeyboardButton(f"🕐 {kw}", callback_data=_safe_callback("hot_", kw)) for kw in history[:3]]
             if hist_row:
                 buttons.append(hist_row)
     hot = await get_hot_keywords(top_n=8)
     row: list = []
     for kw in hot:
-        row.append(InlineKeyboardButton(kw, callback_data=_safe_callback("hot_", html.escape(kw))))
+        row.append(InlineKeyboardButton(kw, callback_data=_safe_callback("hot_", kw)))
         if len(row) >= 4:
             buttons.append(row)
             row = []

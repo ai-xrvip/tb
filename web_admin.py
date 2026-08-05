@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 ADMIN_WEB_TOKEN: str = config.ADMIN_WEB_TOKEN
 DB_PATH: str = config.DB_PATH
 
+if not ADMIN_WEB_TOKEN:
+    logger.warning("ADMIN_WEB_TOKEN is not set - the admin dashboard is publicly accessible!")
+
 app = Flask(__name__, template_folder=None)
 
 # ---------------------------------------------------------------------------
