@@ -201,7 +201,8 @@ async def cleanup_all() -> None:
     for uid in stale_users:
         del user_search_state[uid]
     await cleanup_url_store()
-    await _clean_expired_vip()
+    async with get_vip_lock():
+        await _async_clean_expired_vip()
     cutoff = now - RATE_LIMIT_WINDOW * 2
     for uid in list(_user_search_times.keys()):
         _user_search_times[uid] = [t for t in _user_search_times[uid] if t > cutoff]
@@ -294,14 +295,6 @@ def is_vip(user_id: int) -> bool:
     if now_ts() > expiry:
         return False
     return True
-
-
-def _clean_expired_vip() -> None:
-    """Schedule async expired VIP cleanup with lock protection."""
-    async def _locked_cleanup():
-        async with get_vip_lock():
-            await _async_clean_expired_vip()
-    asyncio.create_task(_locked_cleanup())
 
 
 async def _async_clean_expired_vip() -> None:
