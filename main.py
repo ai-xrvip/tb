@@ -138,76 +138,79 @@ async def _periodic_cleanup(application):
     last_client_recycle = 0.0
     last_proxy_cleanup = 0.0
     while True:
-        await asyncio.sleep(600)
-        await cleanup_all()
-        gc.collect()
-        now_ts_val = time.time()
-
-        # Force httpx client recycle every 2 hours to prevent connection leaks
-        if now_ts_val - last_client_recycle > 7200:
-            try:
-                from scraper import _get_client as _sc_get_client
-                from scraper import _client_lock as _sc_client_lock
-                import scraper as _sc
-                async with _sc_client_lock:
-                    if _sc._httpx_client is not None:
-                        try:
-                            await _sc._httpx_client.aclose()
-                        except Exception:
-                            pass
-                        _sc._httpx_client = None
-                last_client_recycle = now_ts_val
-                logger.debug("Periodic httpx client recycled")
-            except Exception as ex:
-                logger.debug("Periodic httpx recycle failed: %s", ex)
-
-        # Clean up stale proxy clients every 1 hour
-        if now_ts_val - last_proxy_cleanup > 3600:
-            try:
-                import scraper as _sc2
-                async with _sc2._proxy_client_lock:
-                    now = time.time()
-                    expired = [p for p, (_, t) in list(_sc2._proxy_clients.items()) if now - t > 300]
-                    for p in expired:
-                        try:
-                            await _sc2._proxy_clients[p][0].aclose()
-                        except Exception:
-                            pass
-                        del _sc2._proxy_clients[p]
-                    if expired:
-                        logger.debug("Cleaned %d stale proxy clients", len(expired))
-                last_proxy_cleanup = now_ts_val
-            except Exception as ex:
-                logger.debug("Periodic proxy cleanup failed: %s", ex)
-
-        # Log memory usage for leak detection
         try:
-            import psutil
-            proc = psutil.Process()
-            mem_mb = proc.memory_info().rss / 1024 / 1024
-            if mem_mb > 300:
-                logger.warning("High memory usage: %.0f MB", mem_mb)
-        except Exception:
-            pass
+            await asyncio.sleep(600)
+            await cleanup_all()
+            gc.collect()
+            now_ts_val = time.time()
 
-        today = datetime.now().strftime("%Y%m%d")
-        if today != last_reminder_day:
-            last_reminder_day = today
-            now = now_ts()
-            for uid, expiry in list(VIP_USERS.items()):
-                if expiry is not None and 0 < expiry - now <= _ONE_DAY:
-                    exp_str = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
-                    try:
-                        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                        await application.bot.send_message(
-                            chat_id=uid,
-                            text=f"⏰ <b>VIP即将到期提醒</b>\n\n你的VIP会员将于 <b>{exp_str}</b> 到期，请及时续费哦～",
-                            parse_mode="HTML",
-                            reply_markup=InlineKeyboardMarkup([[
-                                InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)
-                            ]]))
-                    except Exception as e:
-                        logger.debug("VIP reminder send failed for user %s: %s", uid, e)
+            # Force httpx client recycle every 2 hours to prevent connection leaks
+            if now_ts_val - last_client_recycle > 7200:
+                try:
+                    from scraper import _get_client as _sc_get_client
+                    from scraper import _client_lock as _sc_client_lock
+                    import scraper as _sc
+                    async with _sc_client_lock:
+                        if _sc._httpx_client is not None:
+                            try:
+                                await _sc._httpx_client.aclose()
+                            except Exception:
+                                pass
+                            _sc._httpx_client = None
+                    last_client_recycle = now_ts_val
+                    logger.debug("Periodic httpx client recycled")
+                except Exception as ex:
+                    logger.debug("Periodic httpx recycle failed: %s", ex)
+
+            # Clean up stale proxy clients every 1 hour
+            if now_ts_val - last_proxy_cleanup > 3600:
+                try:
+                    import scraper as _sc2
+                    async with _sc2._proxy_client_lock:
+                        now = time.time()
+                        expired = [p for p, (_, t) in list(_sc2._proxy_clients.items()) if now - t > 300]
+                        for p in expired:
+                            try:
+                                await _sc2._proxy_clients[p][0].aclose()
+                            except Exception:
+                                pass
+                            del _sc2._proxy_clients[p]
+                        if expired:
+                            logger.debug("Cleaned %d stale proxy clients", len(expired))
+                    last_proxy_cleanup = now_ts_val
+                except Exception as ex:
+                    logger.debug("Periodic proxy cleanup failed: %s", ex)
+
+            # Log memory usage for leak detection
+            try:
+                import psutil
+                proc = psutil.Process()
+                mem_mb = proc.memory_info().rss / 1024 / 1024
+                if mem_mb > 300:
+                    logger.warning("High memory usage: %.0f MB", mem_mb)
+            except Exception:
+                pass
+
+            today = datetime.now().strftime("%Y%m%d")
+            if today != last_reminder_day:
+                last_reminder_day = today
+                now = now_ts()
+                for uid, expiry in list(VIP_USERS.items()):
+                    if expiry is not None and 0 < expiry - now <= _ONE_DAY:
+                        exp_str = datetime.fromtimestamp(expiry).strftime("%Y-%m-%d")
+                        try:
+                            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                            await application.bot.send_message(
+                                chat_id=uid,
+                                text=f"⏰ <b>VIP即将到期提醒</b>\n\n你的VIP会员将于 <b>{exp_str}</b> 到期，请及时续费哦～",
+                                parse_mode="HTML",
+                                reply_markup=InlineKeyboardMarkup([[
+                                    InlineKeyboardButton("💳 购买卡密", url=PURCHASE_URL)
+                                ]]))
+                        except Exception as e:
+                            logger.debug("VIP reminder send failed for user %s: %s", uid, e)
+        except Exception as e:
+            logger.warning("Periodic cleanup iteration failed: %s", e, exc_info=True)
 
 # ========== Startup ==========
 
