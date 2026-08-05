@@ -7,6 +7,8 @@ from typing import Optional
 
 import httpx
 
+from config import config
+
 logger = logging.getLogger(__name__)
 
 PROXY_SOURCES = [
@@ -94,6 +96,8 @@ async def refresh_proxy_pool():
 
 
 def get_random_proxy() -> Optional[str]:
+    if not config.ENABLE_PROXY_POOL:
+        return None
     if _proxy_pool:
         return random.choice(_proxy_pool)
     return None
@@ -153,6 +157,9 @@ async def health_check() -> dict:
 
 async def start_proxy_pool():
     global _refresh_task
+    if not config.ENABLE_PROXY_POOL:
+        logger.info("Proxy pool disabled (ENABLE_PROXY_POOL=false) - direct connection only")
+        return
     if _refresh_task is not None:
         return
 

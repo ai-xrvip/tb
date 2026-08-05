@@ -46,6 +46,11 @@ class Config:
     # SSL verification (disable for sites with problematic certs)
     SSL_VERIFY: bool = os.getenv("SSL_VERIFY", "true").lower() in ("true", "1", "yes")
 
+    # Proxy pool: free-proxy rotation for 4khd.com. Off by default - direct
+    # connection is stable and faster. Enable only if the datacenter IP gets
+    # blocked (symptom: mass 403/429 on direct fetches).
+    ENABLE_PROXY_POOL: bool = os.getenv("ENABLE_PROXY_POOL", "false").lower() in ("true", "1", "yes")
+
     # Rate limiting
     MAX_SEARCHES_PER_MINUTE: int = int(os.getenv("MAX_SEARCHES_PER_MINUTE", "10"))
 
