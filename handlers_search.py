@@ -115,7 +115,7 @@ async def _run_search_and_display(msg, keyword, user_id, loading, query=None):
         # Show or update
         prev_state = user_search_state.get(user_id, {})
         results_msg_id = prev_state.get("results_msg_id")
-        user_search_state[user_id] = {"page": 0, "keyword": keyword, "results": all_results, "ts": now_ts(), "quota_left": quota_left, "album_ids": prev_state.get("album_ids")}
+        user_search_state[user_id] = {"page": 0, "keyword": keyword, "results": all_results, "ts": now_ts(), "quota_left": quota_left}
         if not displayed_once:
             # First display — delete loading, show results
             try:
