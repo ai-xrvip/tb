@@ -84,30 +84,50 @@ async def _fetch_latest_4khd(count: int = DAILY_FRESH) -> list:
     return results
 
 
-def _collect_popular(count: int = DAILY_POPULAR) -> list:
-    """Most-clicked galleries (by gallery_clicks), capped at `count`."""
+async def _collect_popular(count: int = DAILY_POPULAR) -> list:
+    """Most-clicked galleries (memory) + most-favorited (DB) to survive restarts."""
     from scraper import gallery_clicks as gc, gallery_titles as gt
-    if not gc:
-        return []
-    sorted_clicks = sorted(gc.items(), key=lambda x: x[1], reverse=True)
     out = []
-    for url, _clicks in sorted_clicks:
-        title = gt.get(url, "")
-        if not title:
-            continue
-        out.append({
-            "title": title, "url": url, "cover": None,
-            "description": "", "source": "popular", "publish_date": "",
-        })
-        if len(out) >= count:
-            break
+    seen = set()
+    if gc:
+        sorted_clicks = sorted(gc.items(), key=lambda x: x[1], reverse=True)
+        for url, _clicks in sorted_clicks:
+            title = gt.get(url, "")
+            if not title:
+                continue
+            out.append({
+                "title": title, "url": url, "cover": None,
+                "description": "", "source": "popular", "publish_date": "",
+            })
+            seen.add(url)
+            if len(out) >= count:
+                return out
+    # Fallback: most-favorited galleries (persisted in SQLite, so it survives restarts)
+    try:
+        from database import _fetch_all
+        rows = await _fetch_all(
+            "SELECT url, title, COUNT(*) c FROM favorites GROUP BY url ORDER BY c DESC LIMIT ?",
+            (count - len(out),),
+        )
+        for r in rows:
+            if r["url"] in seen:
+                continue
+            out.append({
+                "title": r["title"] or r["url"][:60], "url": r["url"], "cover": None,
+                "description": "", "source": "popular", "publish_date": "",
+            })
+            seen.add(r["url"])
+            if len(out) >= count:
+                break
+    except Exception as e:
+        logger.debug(f"Pre-cache popular DB fallback failed: {e}")
     return out
 
 
 async def _rebuild_daily_pool():
     """Rebuild the pool: 10 newest + 10 most-clicked galleries."""
     fresh = await _fetch_latest_4khd(DAILY_FRESH)
-    popular = _collect_popular(DAILY_POPULAR)
+    popular = await _collect_popular(DAILY_POPULAR)
     async with _pre_cache_lock:
         _pre_cache.clear()
         for g in fresh + popular:
