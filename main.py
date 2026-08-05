@@ -65,6 +65,7 @@ _heartbeat = time.time()
 _shutdown_requested = threading.Event()
 _main_loop_ref = None
 _watchdog_port = int(os.environ.get('PORT', 8000))
+_startup_done = False
 
 def _update_heartbeat():
     global _heartbeat
@@ -212,6 +213,10 @@ async def _periodic_cleanup(application):
 
 async def _startup(application):
     """Run after database is ready in both webhook and polling mode."""
+    global _startup_done
+    if _startup_done:
+        return
+    _startup_done = True
     await start_proxy_pool()
     await start_pre_cache()
 
@@ -361,6 +366,7 @@ def main():
             else:
                 logger.info("No data/ directory found for migration")
             await app.initialize()
+            await _startup(app)  # PTB v21: initialize() no longer runs post_init
             await app.start()
             # Start Flask admin on a separate port
             try:
@@ -418,7 +424,8 @@ def main():
             global _main_loop_ref
             _main_loop_ref = asyncio.get_running_loop()
             _shutdown_requested.clear()
-            await app.initialize()  # triggers post_init → _startup → proxy_pool + pre_cache + bg tasks
+            await app.initialize()
+            await _startup(app)  # PTB v21: initialize() no longer runs post_init -> proxy_pool + pre_cache + bg tasks
             await app.start()
             await app.updater.start_polling(allowed_updates=["message", "callback_query", "inline_query"])
             try:

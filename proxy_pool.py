@@ -16,6 +16,7 @@ PROXY_SOURCES = [
 
 REFRESH_INTERVAL = 600
 PROXY_TIMEOUT = 5.0
+PROXY_REFRESH_TIMEOUT = 30  # hard cap so a hung proxy source never stalls startup
 VALIDATE_URLS = ["https://www.4khd.com"]
 
 _proxy_pool: list[str] = []
@@ -155,12 +156,20 @@ async def start_proxy_pool():
     if _refresh_task is not None:
         return
 
-    await refresh_proxy_pool()
+    async def _safe_refresh():
+        """Refresh with a hard timeout so a hung proxy source can't stall the loop."""
+        try:
+            await asyncio.wait_for(refresh_proxy_pool(), timeout=PROXY_REFRESH_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("Proxy refresh timed out after %ss, keeping old pool", PROXY_REFRESH_TIMEOUT)
+        except Exception as e:
+            logger.warning(f"Proxy refresh failed: {e}")
 
     async def _periodic_refresh():
+        await _safe_refresh()  # initial fill runs in background; never blocks startup
         await asyncio.sleep(REFRESH_INTERVAL)
         while True:
-            await _do_refresh()
+            await _safe_refresh()
             stats = await get_pool_stats()
             hc = await health_check()
             logger.info(
@@ -171,7 +180,7 @@ async def start_proxy_pool():
             await asyncio.sleep(REFRESH_INTERVAL)
 
     _refresh_task = asyncio.create_task(_periodic_refresh())
-    logger.info("Proxy pool started (health check every 10min)")
+    logger.info("Proxy pool started (background refresh every 10min)")
 
 
 async def stop_proxy_pool():
