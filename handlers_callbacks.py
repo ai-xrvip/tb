@@ -3,6 +3,7 @@ from bot_utils import (
     now_ts, store_url, get_url, clean_title, parse_count_from_title,
     is_vip, send_or_edit, ADMIN_IDS, VIP_USERS, ALL_USERS, INVITES,
     user_search_state, user_waiting_card, user_waiting_search, url_store,
+    spawn,
     admin_setvip_state, START_TEXT, START_KEYBOARD, VIP_TEXT,
     PURCHASE_URL, _ONE_DAY,
     save_vip_db, save_invite_db, build_hot_keyword_keyboard,
@@ -349,7 +350,11 @@ async def _route_hot(update, context):
 async def _route_page(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
-    page = int(query.data.split("_")[1])
+    parts = query.data.split("_")
+    try:
+        page = int(parts[1]) if len(parts) > 1 else 0
+    except ValueError:
+        page = 0
     state = user_search_state.get(user_id)
     if not state:
         await query.edit_message_text("⏳ 会话已过期，请重新搜索。")
@@ -411,15 +416,15 @@ async def _route_magnet(update, context):
     await query.answer()
     status_msg = await query.message.reply_text("🧲 正在后台获取磁力链，稍后通知你...")
     async def _bg_magnet():
-        magnet = await get_eh_magnet(url)
         try:
+            magnet = await get_eh_magnet(url)
             if magnet:
                 await status_msg.edit_text(f"🧲 <b>磁力链接</b>\n\n<code>{magnet}</code>", parse_mode="HTML")
             else:
                 await status_msg.edit_text("❌ 该图集暂无磁力链接")
         except Exception:
             logger.debug("magnet status msg edit failed (msg may be deleted)")
-    asyncio.create_task(_bg_magnet())
+    spawn(_bg_magnet())
 
 @_prefix("d4_")
 async def _route_download_4khd(update, context):
@@ -456,7 +461,7 @@ async def _route_download_4khd(update, context):
                 await status_msg.edit_text(f"❌ 下载任务异常：{e}")
             except Exception:
                 pass
-    asyncio.create_task(_bg_download())
+    spawn(_bg_download())
 
 
 # Favorites (prefix "fav_")

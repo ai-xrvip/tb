@@ -6,6 +6,7 @@ from bot_utils import (
     INVITES, ADMIN_IDS, START_TEXT, START_KEYBOARD, VIP_TEXT,
     PURCHASE_URL, _ONE_DAY, MENU_KEYBOARD,
     save_vip_db, save_invite_db, load_vip_db, build_hot_keyword_keyboard,
+    spawn,
     get_invite_lock, get_vip_lock,
 )
 from handlers_search import _do_search, _do_search_callback
@@ -33,16 +34,16 @@ async def cmd_start(update, context):
     user_waiting_card.discard(user_id)
     if user_id not in ALL_USERS:
         ALL_USERS.add(user_id)
-        asyncio.create_task(db_add_user(user_id))
-        asyncio.create_task(db_bump_stat(datetime.now().strftime("%Y-%m-%d"), "new_users"))
+        spawn(db_add_user(user_id))
+        spawn(db_bump_stat(datetime.now().strftime("%Y-%m-%d"), "new_users"))
     else:
-        asyncio.create_task(db_touch_user(user_id))
+        spawn(db_touch_user(user_id))
         # Optional free trial for brand-new users (FREE_TRIAL_DAYS > 0).
         # Note: permanent VIP is stored as None, so membership must be checked
         # via `user_id in VIP_USERS` (a missing key means "not a VIP at all").
         if config.FREE_TRIAL_DAYS > 0 and user_id not in VIP_USERS:
             VIP_USERS[user_id] = now_ts() + config.FREE_TRIAL_DAYS * 86400
-            asyncio.create_task(db_save_vip(user_id, VIP_USERS[user_id]))
+            spawn(db_save_vip(user_id, VIP_USERS[user_id]))
         # Check invite: if started with /start INVITE_CODE, grant reward
         if context.args:
             code = context.args[0]
@@ -61,7 +62,7 @@ async def cmd_start(update, context):
                     else:
                         # No VIP or expired — grant 1 day
                         VIP_USERS[inviter_id] = now_ts() + _ONE_DAY
-                    asyncio.create_task(db_save_vip(inviter_id, VIP_USERS[inviter_id]))
+                    spawn(db_save_vip(inviter_id, VIP_USERS[inviter_id]))
                     try:
                         await context.bot.send_message(
                             chat_id=int(inviter),
@@ -78,7 +79,7 @@ async def cmd_start(update, context):
                         VIP_USERS[user_id] = invited_expiry + _ONE_DAY
                     else:
                         VIP_USERS[user_id] = now_ts() + _ONE_DAY
-                    asyncio.create_task(db_save_vip(user_id, VIP_USERS[user_id]))
+                    spawn(db_save_vip(user_id, VIP_USERS[user_id]))
     await update.message.reply_text(START_TEXT, reply_markup=START_KEYBOARD, parse_mode="HTML")
     await update.message.reply_text("💕 使用下方快捷按钮操作～", reply_markup=MENU_KEYBOARD)
     # Deep link from inline mode: ?start=search_<keyword> → run the search directly
@@ -135,7 +136,7 @@ async def cmd_admin(update, context):
     for uid in expired:
         del fresh_vip[uid]
     if expired:
-        asyncio.create_task(db_delete_expired_vip())
+        spawn(db_delete_expired_vip())
     async with get_vip_lock():
         VIP_USERS.clear()
         VIP_USERS.update(fresh_vip)

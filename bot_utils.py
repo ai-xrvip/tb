@@ -5,6 +5,7 @@ import logging
 import re
 import sys
 import time as _time
+import traceback
 from collections import defaultdict
 from datetime import datetime
 
@@ -18,6 +19,18 @@ from database import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def spawn(coro) -> asyncio.Task:
+    """Schedule a fire-and-forget coroutine; exceptions are logged, never lost."""
+    async def _runner():
+        try:
+            await coro
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning("Background task error:\n" + traceback.format_exc())
+    return asyncio.create_task(_runner())
 
 # ---- Logging (configured once by bot.py, re-used here) ----
 # ---- Constants ----

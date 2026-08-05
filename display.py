@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Per-URL gallery image cache (avoids re-fetching the whole gallery on every page turn)
 _GALLERY_CACHE_TTL = 1800  # 30 min
+_GALLERY_CACHE_MAX_ENTRIES = 200  # bound memory: max cached galleries
 _gallery_images_cache: dict[str, tuple[float, list]] = {}
 
 
@@ -59,6 +60,16 @@ async def _load_all_images(url: str, user_id: int) -> Optional[list]:
         logger.error("Load gallery images failed: " + traceback.format_exc())
         return None
     _gallery_images_cache[url] = (time.time(), all_images)
+    # Bound the cache: drop expired entries, then evict oldest if still over limit
+    if len(_gallery_images_cache) > _GALLERY_CACHE_MAX_ENTRIES:
+        now = time.time()
+        expired = [k for k, (t, _) in _gallery_images_cache.items() if now - t >= _GALLERY_CACHE_TTL]
+        for k in expired:
+            del _gallery_images_cache[k]
+    if len(_gallery_images_cache) > _GALLERY_CACHE_MAX_ENTRIES:
+        oldest = sorted(_gallery_images_cache.items(), key=lambda kv: kv[1][0])
+        for k, _ in oldest[: max(1, len(oldest) // 4)]:
+            del _gallery_images_cache[k]
     return all_images
 
 
@@ -153,9 +164,15 @@ async def _show_results_page(msg_or_query, user_id, is_update=False, progressive
             old_task = state.get("album_task")
             if old_task and not old_task.done():
                 old_task.cancel()
-            state["album_task"] = asyncio.create_task(
-                asyncio.wait_for(_update_cover_album(bot, chat_id, album_ids, page_results), timeout=60)
-            )
+            async def _guarded_album_sync():
+                try:
+                    await asyncio.wait_for(
+                        _update_cover_album(bot, chat_id, album_ids, page_results), timeout=60)
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.debug("Album sync task error: " + traceback.format_exc())
+            state["album_task"] = asyncio.create_task(_guarded_album_sync())
     if not is_vip_user and state.get("quota_left") is not None:
         text += f"\n🆓 今日剩余免费搜索 <b>{state['quota_left']}</b> 次 · 开通VIP无限搜\n"
     nav_buttons = []

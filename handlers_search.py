@@ -3,7 +3,7 @@ from bot_utils import (
     now_ts, store_url, get_url, clean_title, parse_count_from_title,
     is_vip, check_rate_limit, safe_search_wrapper,
     user_search_state, dedup_results, quality_score, _safe_callback,
-    EH_ENABLED, RESULTS_PER_PAGE, VIP_CTA_TEXT, vip_cta_keyboard,
+    EH_ENABLED, RESULTS_PER_PAGE, VIP_CTA_TEXT, vip_cta_keyboard, spawn,
 )
 from display import _show_results_page
 from scraper import search_galleries
@@ -22,7 +22,7 @@ async def _do_search(update, keyword):
     loading = await msg.reply_text("🔍 正在搜索中，请稍候...")
     user_id = update.effective_user.id
     # Record search history
-    asyncio.create_task(db_add_search_history(user_id, keyword))
+    spawn(db_add_search_history(user_id, keyword))
     if not is_vip(user_id) and not await check_rate_limit(user_id):
         await loading.delete()
         await msg.reply_text("⏱ 搜索太频繁了，请稍后再试～",
@@ -35,7 +35,7 @@ async def _do_search(update, keyword):
 async def _do_search_callback(query, keyword):
     user_id = query.from_user.id
     msg = query.message
-    asyncio.create_task(db_add_search_history(user_id, keyword))
+    spawn(db_add_search_history(user_id, keyword))
     loading = await msg.reply_text("🔍 正在搜索中，请稍候...")
     await _run_search_and_display(msg, keyword, user_id, loading, query)
 
@@ -110,7 +110,7 @@ async def _run_search_and_display(msg, keyword, user_id, loading, query=None):
 
         # Track search stat (once)
         if not displayed_once:
-            asyncio.create_task(db_bump_stat(datetime.now().strftime("%Y-%m-%d"), "searches"))
+            spawn(db_bump_stat(datetime.now().strftime("%Y-%m-%d"), "searches"))
 
         # Show or update
         prev_state = user_search_state.get(user_id, {})

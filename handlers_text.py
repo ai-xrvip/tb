@@ -4,7 +4,7 @@ from bot_utils import (
     now_ts, is_vip, check_rate_limit, user_waiting_search, user_waiting_card,
     ADMIN_IDS, VIP_USERS, ALL_USERS, INVITES, admin_setvip_state,
     PURCHASE_URL, _ONE_DAY, VIP_TEXT, build_hot_keyword_keyboard,
-    save_vip_db,
+    save_vip_db, spawn,
 )
 from handlers_commands import cmd_random, cmd_help, cmd_my
 from handlers_search import _do_search
@@ -66,7 +66,7 @@ async def _try_activate_card(update, user_id: int, raw: str) -> bool:
     if expiry is not None and is_current_vip and current_expiry and current_expiry > now_ts():
         expiry = current_expiry + int(days) * 86400
 
-    asyncio.create_task(db_bump_stat(datetime.now().strftime("%Y-%m-%d"), "card_activations"))
+    spawn(db_bump_stat(datetime.now().strftime("%Y-%m-%d"), "card_activations"))
     VIP_USERS[user_id] = expiry
     await save_vip_db(user_id, expiry)
     if days:
@@ -100,7 +100,7 @@ async def handle_text(update, context):
             await save_vip_db(target_id, VIP_USERS[target_id])
             if target_id not in ALL_USERS:
                 ALL_USERS.add(target_id)
-                asyncio.create_task(db_add_user(target_id))
+                spawn(db_add_user(target_id))
             await update.message.reply_text(
                 f"✅ 已将用户 <code>{target_id}</code> 设置为VIP（{label}）",
                 parse_mode="HTML")

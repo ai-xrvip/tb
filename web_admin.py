@@ -217,7 +217,8 @@ def root():
 @app.route("/health/db")
 def health_db():
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("SELECT 1")
         conn.close()
         return jsonify({"database": "ok"})
@@ -229,7 +230,8 @@ def health_db():
 def health_ready():
     db_ok = True
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("SELECT 1")
         conn.close()
     except Exception:
@@ -302,7 +304,8 @@ def _gather_data() -> dict:
     today_str = now.strftime("%Y-%m-%d")
     yesterday_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.execute("PRAGMA busy_timeout=10000")
     conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
 
     # Totals

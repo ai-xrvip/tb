@@ -204,7 +204,11 @@ async def _fetch(url: str, retries: int = 2) -> Optional[str]:
         if r.status_code == 200:
             return r.text
         if r.status_code == 429:
-            wait = int(r.headers.get("Retry-After", "10"))
+            try:
+                wait = int(r.headers.get("Retry-After", "10"))
+            except (TypeError, ValueError):
+                wait = 10
+            wait = max(1, min(wait, 60))  # cap: never let one request hang for hours
             logger.warning(f"Rate limited on {url[:60]}, waiting {wait}s")
             await asyncio.sleep(wait)
         else:
