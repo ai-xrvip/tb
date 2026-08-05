@@ -286,11 +286,10 @@ async def search_galleries(keyword: str, max_results: int = None, max_pages: int
     if max_results is None:
         max_results = config.MAX_SEARCH_RESULTS
 
-    await track_search(keyword)
-
     cache_key = f"search:{keyword.lower()}"
     cached = await _cache_get(cache_key)
     if cached is not None:
+        await track_search(keyword)
         return list(cached)[:max_results]
 
     search_url = config.SEARCH_URL.format(keyword=urllib.parse.quote(keyword))
@@ -367,9 +366,12 @@ async def search_galleries(keyword: str, max_results: int = None, max_pages: int
             if len(all_results) >= max_results:
                 await _cache_set(cache_key, all_results)
                 logger.info(f"Found {len(all_results)} results for {keyword!r} (capped)")
+                await track_search(keyword)
                 return all_results
 
     await _cache_set(cache_key, all_results)
+    if all_results:
+        await track_search(keyword)
     logger.info(f"Found {len(all_results)} results for {keyword!r}")
     return all_results
 
@@ -512,20 +514,19 @@ async def get_random_gallery():
     except Exception:
         pass
 
-    # Live fallback: search 4KHD with hot keywords
-    hot_kws = await get_hot_keywords(top_n=5)
-    kw = _random.choice(hot_kws) if hot_kws else "cosplay"
-    candidates = []
-
-    # 4KHD
-    try:
-        hd = await search_galleries(kw, max_results=10, max_pages=1)
-        candidates.extend(hd)
-    except Exception:
-        pass
-
-    if candidates:
-        return _random.choice(candidates)
+    # Live fallback: try several hot keywords so a single dead keyword
+    # (e.g. a 0-result search) doesn't fail the whole random pick.
+    hot_kws = await get_hot_keywords(top_n=8)
+    if not hot_kws:
+        hot_kws = ["cosplay", "黑丝", "自拍", "写真", "jk"]
+    _random.shuffle(hot_kws)
+    for kw in hot_kws:
+        try:
+            hd = await search_galleries(kw, max_results=10, max_pages=1)
+            if hd:
+                return _random.choice(hd)
+        except Exception:
+            continue
     return None
 
 
