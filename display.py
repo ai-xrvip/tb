@@ -13,7 +13,7 @@ from io import BytesIO
 from datetime import datetime
 from typing import Optional
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto,
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, CallbackQuery,
 )
 logger = logging.getLogger(__name__)
 
@@ -202,7 +202,23 @@ async def _show_results_page(msg_or_query, user_id, is_update=False, progressive
                 return None
             except Exception:
                 pass
-    sent = await send_or_edit(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
+    if isinstance(msg_or_query, CallbackQuery) and not is_update:
+        # Hot-keyword / menu searches used to edit the old menu message in
+        # place, which left the cover album *below* the result text. Delete
+        # the stale message and send a fresh text below the album instead, so
+        # images sit above the results (same layout as typed searches).
+        stale_msg = msg_or_query.message
+        try:
+            await stale_msg.delete()
+        except Exception:
+            pass
+        try:
+            sent = await stale_msg.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+        except Exception as e:
+            logger.warning("Results text send failed: %s", e)
+            sent = None
+    else:
+        sent = await send_or_edit(msg_or_query, text, reply_markup=InlineKeyboardMarkup(buttons))
     return sent
 
 async def _send_xchina_detail(update, url, author="", publish_date="", from_random=False):
