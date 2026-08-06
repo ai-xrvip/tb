@@ -253,6 +253,24 @@ def health_ready():
     except Exception:
         pass
 
+    # Bot-loop liveness: if the asyncio loop hasn't bumped its heartbeat for
+    # >5 min it is wedged; return 503 so Railway's health check restarts the
+    # container (a wedged loop can otherwise live forever as a zombie).
+    try:
+        from heartbeat import age as _hb_age
+        bot_stale = _hb_age() > 300
+    except Exception:
+        bot_stale = False
+
+    if bot_stale:
+        return jsonify({
+            "status": "stale",
+            "database": "ok" if db_ok else "error",
+            "proxy_pool_size": pool_size,
+            "pre_cache_size": cache_size,
+            "bot_age_secs": int(_hb_age()),
+        }), 503
+
     return jsonify({
         "status": "ready" if db_ok else "degraded",
         "database": "ok" if db_ok else "error",

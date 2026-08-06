@@ -256,9 +256,9 @@ async def db_delete_expired_vip() -> int:
     now = time.time()
     def _do():
         c = _conn()
-        c.execute("DELETE FROM vip_users WHERE expiry IS NOT NULL AND expiry < ?", (now,))
+        cur = c.execute("DELETE FROM vip_users WHERE expiry IS NOT NULL AND expiry < ?", (now,))
         c.commit()
-        return c.rowcount
+        return cur.rowcount
     return await _run(_do)
 
 

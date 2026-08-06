@@ -70,6 +70,8 @@ _startup_done = False
 def _update_heartbeat():
     global _heartbeat
     _heartbeat = time.time()
+    import heartbeat as _hb
+    _hb.bump()
 
 def _http_health_check():
     try:
@@ -99,9 +101,14 @@ def _watchdog():
                 os.kill(os.getpid(), getattr(signal, "SIGKILL", signal.SIGTERM))
         else:
             http_fail_count = 0
-        # Tier 1: asyncio heartbeat
+        # Tier 1: asyncio heartbeat (age from heartbeat module; the local
+        # _heartbeat var is kept only as a fallback if the import ever fails)
         if http_fail_count == 0:
-            elapsed = time.time() - _heartbeat
+            try:
+                import heartbeat as _hb
+                elapsed = _hb.age()
+            except Exception:
+                elapsed = time.time() - _heartbeat
             if elapsed > 600:
                 logger.critical(
                     'Watchdog: bot unresponsive for %.0fs, triggering graceful restart',
@@ -122,6 +129,19 @@ threading.Thread(target=_watchdog, daemon=True, name="watchdog").start()
 # ========== Logging ==========
 
 def _setup_logging():
+    # Make stdout/stderr non-blocking: if the container log collector dies, a
+    # full pipe would otherwise block the event loop forever (the process goes
+    # "zombie": web health alive, bot frozen). With O_NONBLOCK, log writes that
+    # would block are dropped instead of freezing the bot.
+    try:
+        import fcntl
+        for stream in (sys.stdout, sys.stderr):
+            fd = stream.fileno()
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    except Exception:
+        pass  # non-POSIX (e.g. local Windows) or fcntl unavailable: keep default
+
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         level=logging.INFO,
